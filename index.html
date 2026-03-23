@@ -16,121 +16,38 @@
       </div>
     </header>
 
-    <main class="layout">
-      <aside class="panel controls">
-        <section>
-          <h2>1. データ</h2>
-          <label class="file-label">
-            <span>ファイルを選択</span>
-            <input id="fileInput" type="file" accept=".txt,.csv,.dat" multiple />
-          </label>
-          <label>
-            <span>表示データ</span>
-            <select id="datasetSelect"></select>
-          </label>
-          <div class="hint">同時に読み込んだ全ファイルに対し、現在の初期値・範囲・モデルで一括フィットできます。</div>
-        </section>
-
-        <section>
-          <h2>2. モデルと背景</h2>
-          <label>
-            <span>モデル</span>
-            <select id="model">
-              <option value="gaussian">Gaussian</option>
-              <option value="lorentzian">Lorentzian</option>
-              <option value="voigt">Voigt</option>
-              <option value="bwf">BWF</option>
-            </select>
-          </label>
-          <label>
-            <span>ピーク数</span>
-            <input id="peakCount" type="number" min="1" max="6" step="1" value="1" />
-          </label>
-          <div class="hint">同一モデルのピーク和として 1〜6 個まで同時フィットできます。</div>
-          <label class="inline-check">
-            <input id="subtractBg" type="checkbox" checked />
-            <span>選択範囲の端部から線形背景を推定して差し引く</span>
-          </label>
-          <label>
-            <span>背景に使う両端割合</span>
-            <input id="bgEdgeFraction" type="number" min="0.05" max="0.45" step="0.01" value="0.15" />
-          </label>
-          <div class="hint">例: 0.15 は選択範囲の左右それぞれ15%の点群で線形背景を推定します。</div>
-          <label>
-            <span>背景差し引きZIP内の拡張子</span>
-            <select id="bgZipExtension">
-              <option value="csv">.csv</option>
-              <option value="txt">.txt</option>
-              <option value="dat">.dat</option>
-            </select>
-          </label>
-          <label>
-            <span>背景差し引きZIP内の列</span>
-            <select id="bgZipColumns">
-              <option value="x_y_corrected">x, y_corrected の2列</option>
-              <option value="full">x, y_raw, y_background, y_corrected の4列</option>
-            </select>
-          </label>
-          <label>
-            <span>背景差し引きZIP内の区切り文字</span>
-            <select id="bgZipDelimiter">
-              <option value="comma">カンマ (,)</option>
-              <option value="tab">タブ</option>
-              <option value="space">スペース</option>
-            </select>
-          </label>
-          <div class="hint">ZIP出力時に、背景差し引き後の y 軸だけを残す2列版か、元データと背景も含む4列版を選べます。.txt / .dat を選んだ場合は、区切り文字をカンマ・タブ・スペースから切り替えられます（.csv は常にカンマです）。</div>
-        </section>
-
-        <section>
-          <h2>3. 初期値</h2>
-          <div id="peakInputs" class="peak-inputs"></div>
-          <button id="autoInitBtn" type="button">選択範囲から初期値を再推定</button>
-          <div class="hint">各定数は「固定」で最適化対象から外せます。「共有ID」に同じ文字列を入れると、複数ピークでその定数を共通化します。</div>
-        </section>
-
-        <section>
-          <h2>4. 実行</h2>
-          <div class="selection-box">
-            <div>フィット範囲</div>
-            <strong id="selectionText">未選択</strong>
-            <div class="hint">グラフ上を横方向にドラッグして範囲指定</div>
-          </div>
-          <label class="inline-check">
-            <input id="sequentialFit" type="checkbox" />
-            <span>連続フィット時に直前ファイルの結果を次ファイルの初期値に使う</span>
-          </label>
-          <div class="hint">オンにすると、1個目の結果を2個目へ、2個目の結果を3個目へという形で初期値を順次引き継げます。</div>
-          <div id="trialStatus" class="stats-box">
-            <div class="muted">試しフィット待ちです。初期条件を決めたら「試しフィット」を押してください。</div>
-          </div>
-          <div class="button-row">
-            <button id="fitCurrentBtn" type="button">試しフィット</button>
-            <button id="acceptTrialBtn" type="button" class="secondary" disabled>採用して終了</button>
-            <button id="restoreTrialBtn" type="button" class="secondary" disabled>初期条件に戻す</button>
-            <button id="fitAllBtn" type="button">全ファイルを一括フィット</button>
-            <button id="subtractAllBtn" type="button">背景差し引きのみ（ZIP）</button>
-            <button id="exportCsvBtn" type="button">CSVを書き出し</button>
-            <button id="saveBatchBtn" type="button" class="secondary">全体結果を保存</button>
-            <button id="saveCurrentBtn" type="button" class="secondary">個別結果を保存</button>
-            <button id="loadCurrentBtn" type="button" class="secondary">個別結果を読み込む</button>
-            <input id="loadCurrentInput" type="file" accept=".json,application/json" hidden />
-            <button id="clearBtn" type="button" class="secondary">クリア</button>
-          </div>
-        </section>
-      </aside>
-
-      <section class="panel plot-panel">
-        <div class="plot-header">
+    <main class="dashboard-layout">
+      <section class="panel plot-panel main-plot-panel">
+        <div class="plot-header sticky-toolbar">
           <div>
             <h2>グラフ</h2>
             <p>青: 生データ / 灰: 線形背景 / 緑: 背景差し引きデータ / 細線: 各ピーク / 赤: 合成フィット</p>
+          </div>
+          <div class="toolbar-grid">
+            <label class="compact-field file-label">
+              <span>ファイルを選択</span>
+              <input id="fileInput" type="file" accept=".txt,.csv,.dat" multiple />
+            </label>
+            <label class="compact-field">
+              <span>表示データ</span>
+              <select id="datasetSelect"></select>
+            </label>
+            <div class="selection-box compact-box">
+              <div>フィット範囲</div>
+              <strong id="selectionText">未選択</strong>
+              <div class="hint">グラフ上を横方向にドラッグして範囲指定</div>
+            </div>
+            <div class="action-cluster compact-actions">
+              <button id="fitCurrentBtn" type="button">試しフィット</button>
+              <button id="acceptTrialBtn" type="button" class="secondary" disabled>採用して終了</button>
+              <button id="restoreTrialBtn" type="button" class="secondary" disabled>初期条件に戻す</button>
+            </div>
           </div>
         </div>
         <canvas id="plotCanvas"></canvas>
       </section>
 
-      <aside class="panel results-panel">
+      <aside class="panel results-panel side-panel">
         <section>
           <h2>現在の結果</h2>
           <div id="fitInfo" class="stats-box">
@@ -138,6 +55,130 @@
           </div>
         </section>
 
+        <section>
+          <h2>試しフィットの状態</h2>
+          <div id="trialStatus" class="stats-box">
+            <div class="muted">試しフィット待ちです。初期条件を決めたら「試しフィット」を押してください。</div>
+          </div>
+        </section>
+      </aside>
+
+      <section class="panel workspace-panel">
+        <div class="workspace-header">
+          <div>
+            <h2>設定と一括処理</h2>
+            <p>縦に長くならないよう、設定を目的別の折りたたみセクションに整理しました。</p>
+          </div>
+        </div>
+
+        <div class="accordion-grid">
+          <details class="control-card" open>
+            <summary>
+              <span>データとモデル</span>
+              <span class="summary-meta">読み込み / モデル / 背景</span>
+            </summary>
+            <div class="control-card-body form-grid split-2">
+              <div class="field-stack">
+                <label>
+                  <span>モデル</span>
+                  <select id="model">
+                    <option value="gaussian">Gaussian</option>
+                    <option value="lorentzian">Lorentzian</option>
+                    <option value="voigt">Voigt</option>
+                    <option value="bwf">BWF</option>
+                  </select>
+                </label>
+                <label>
+                  <span>ピーク数</span>
+                  <input id="peakCount" type="number" min="1" max="6" step="1" value="1" />
+                </label>
+                <div class="hint">同一モデルのピーク和として 1〜6 個まで同時フィットできます。</div>
+              </div>
+              <div class="field-stack">
+                <label class="inline-check">
+                  <input id="subtractBg" type="checkbox" checked />
+                  <span>選択範囲の端部から線形背景を推定して差し引く</span>
+                </label>
+                <label>
+                  <span>背景に使う両端割合</span>
+                  <input id="bgEdgeFraction" type="number" min="0.05" max="0.45" step="0.01" value="0.15" />
+                </label>
+                <div class="hint">例: 0.15 は選択範囲の左右それぞれ15%の点群で線形背景を推定します。</div>
+              </div>
+            </div>
+          </details>
+
+          <details class="control-card" open>
+            <summary>
+              <span>ピーク初期値</span>
+              <span class="summary-meta">複数列入力 / 固定 / 共有ID</span>
+            </summary>
+            <div class="control-card-body">
+              <div id="peakInputs" class="peak-inputs"></div>
+              <div class="inline-actions">
+                <button id="autoInitBtn" type="button">選択範囲から初期値を再推定</button>
+              </div>
+              <div class="hint">各定数は「固定」で最適化対象から外せます。「共有ID」に同じ文字列を入れると、複数ピークでその定数を共通化します。</div>
+            </div>
+          </details>
+
+          <details class="control-card">
+            <summary>
+              <span>一括処理と書き出し</span>
+              <span class="summary-meta">連続フィット / ZIP / JSON / CSV</span>
+            </summary>
+            <div class="control-card-body form-grid split-2">
+              <div class="field-stack">
+                <label class="inline-check">
+                  <input id="sequentialFit" type="checkbox" />
+                  <span>連続フィット時に直前ファイルの結果を次ファイルの初期値に使う</span>
+                </label>
+                <div class="hint">オンにすると、1個目の結果を2個目へ、2個目の結果を3個目へという形で初期値を順次引き継げます。</div>
+                <div class="action-cluster">
+                  <button id="fitAllBtn" type="button">全ファイルを一括フィット</button>
+                  <button id="subtractAllBtn" type="button">背景差し引きのみ（ZIP）</button>
+                  <button id="exportCsvBtn" type="button">CSVを書き出し</button>
+                </div>
+              </div>
+              <div class="field-stack">
+                <label>
+                  <span>背景差し引きZIP内の拡張子</span>
+                  <select id="bgZipExtension">
+                    <option value="csv">.csv</option>
+                    <option value="txt">.txt</option>
+                    <option value="dat">.dat</option>
+                  </select>
+                </label>
+                <label>
+                  <span>背景差し引きZIP内の列</span>
+                  <select id="bgZipColumns">
+                    <option value="x_y_corrected">x, y_corrected の2列</option>
+                    <option value="full">x, y_raw, y_background, y_corrected の4列</option>
+                  </select>
+                </label>
+                <label>
+                  <span>背景差し引きZIP内の区切り文字</span>
+                  <select id="bgZipDelimiter">
+                    <option value="comma">カンマ (,)</option>
+                    <option value="tab">タブ</option>
+                    <option value="space">スペース</option>
+                  </select>
+                </label>
+                <div class="hint">ZIP出力時に、背景差し引き後の y 軸だけを残す2列版か、元データと背景も含む4列版を選べます。.txt / .dat を選んだ場合は、区切り文字をカンマ・タブ・スペースから切り替えられます（.csv は常にカンマです）。</div>
+                <div class="action-cluster secondary-actions">
+                  <button id="saveBatchBtn" type="button" class="secondary">全体結果を保存</button>
+                  <button id="saveCurrentBtn" type="button" class="secondary">個別結果を保存</button>
+                  <button id="loadCurrentBtn" type="button" class="secondary">個別結果を読み込む</button>
+                  <input id="loadCurrentInput" type="file" accept=".json,application/json" hidden />
+                  <button id="clearBtn" type="button" class="secondary">クリア</button>
+                </div>
+              </div>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <section class="panel results-table-panel">
         <section>
           <h2>一括結果</h2>
           <div class="table-wrap">
@@ -159,7 +200,7 @@
             </table>
           </div>
         </section>
-      </aside>
+      </section>
     </main>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>

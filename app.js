@@ -26,6 +26,7 @@ function bindElements() {
   els.subtractBg = document.getElementById('subtractBg');
   els.bgEdgeFraction = document.getElementById('bgEdgeFraction');
   els.bgZipExtension = document.getElementById('bgZipExtension');
+  els.bgZipColumns = document.getElementById('bgZipColumns');
   els.peakInputs = document.getElementById('peakInputs');
   els.autoInitBtn = document.getElementById('autoInitBtn');
   els.fitCurrentBtn = document.getElementById('fitCurrentBtn');
@@ -279,12 +280,14 @@ async function exportBackgroundSubtractedZip() {
     if (!state.selection) throw new Error('先にグラフ上で処理範囲を選択してください。');
     const edgeFraction = Number(els.bgEdgeFraction.value);
     const outputExtension = normalizeBackgroundZipExtension(els.bgZipExtension.value);
+    const columnMode = normalizeBackgroundZipColumnMode(els.bgZipColumns.value);
     const files = state.datasets.map((ds) => ({
       name: buildBackgroundOutputName(ds.name, outputExtension),
       content: PeakFitCore.backgroundSubtractedToCSV(ds.data, {
         xMin: state.selection.xMin,
         xMax: state.selection.xMax,
         edgeFraction,
+        columnMode,
       }),
     }));
     const readme = [
@@ -293,6 +296,7 @@ async function exportBackgroundSubtractedZip() {
       `selection_x_max,${state.selection.xMax}`,
       `edge_fraction,${edgeFraction}`,
       `file_extension,${outputExtension}`,
+      `column_mode,${columnMode}`,
       `generated_at,${new Date().toISOString()}`,
     ].join('\n');
     files.unshift({ name: 'README.txt', content: readme });
@@ -592,7 +596,12 @@ function registerServiceWorker() {
 
 
 function normalizeBackgroundZipExtension(value) {
-  return ['csv', 'txt', 'dat'].includes(value) ? value : 'csv';
+  const normalized = String(value || '').toLowerCase();
+  return ['csv', 'txt', 'dat'].includes(normalized) ? normalized : 'csv';
+}
+
+function normalizeBackgroundZipColumnMode(value) {
+  return value === 'x_y_corrected' ? 'x_y_corrected' : 'full';
 }
 
 function buildBackgroundOutputName(fileName, extension = 'csv') {

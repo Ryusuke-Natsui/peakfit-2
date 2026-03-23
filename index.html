@@ -64,7 +64,14 @@
               <option value="dat">.dat</option>
             </select>
           </label>
-          <div class="hint">ZIP内の各データファイル名の拡張子を選べます。内容は x, y_raw, y_background, y_corrected の4列です。</div>
+          <label>
+            <span>背景差し引きZIP内の列</span>
+            <select id="bgZipColumns">
+              <option value="x_y_corrected">x, y_corrected の2列</option>
+              <option value="full">x, y_raw, y_background, y_corrected の4列</option>
+            </select>
+          </label>
+          <div class="hint">ZIP出力時に、背景差し引き後の y 軸だけを残す2列版か、元データと背景も含む4列版を選べます。</div>
         </section>
 
         <section>

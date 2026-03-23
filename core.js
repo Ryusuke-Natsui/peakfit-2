@@ -71,12 +71,7 @@
   function estimateLinearBackground(points, edgeFraction) {
     const n = points.length;
     if (!n) {
-      return {
-        slope: 0,
-        intercept: 0,
-        bgY: [],
-        correctedY: [],
-      };
+      return { slope: 0, intercept: 0, bgY: [], correctedY: [] };
     }
     const edgeN = clamp(Math.floor(n * edgeFraction), 2, Math.max(2, Math.floor(n / 2)));
     const bgPts = points.slice(0, edgeN).concat(points.slice(Math.max(0, n - edgeN)));
@@ -112,11 +107,7 @@
       1 / 5
     );
     const ratio = f === 0 ? 0 : fL / f;
-    const eta = clamp(
-      1.36603 * ratio - 0.47719 * ratio * ratio + 0.11116 * ratio * ratio * ratio,
-      0,
-      1
-    );
+    const eta = clamp(1.36603 * ratio - 0.47719 * ratio * ratio + 0.11116 * ratio * ratio * ratio, 0, 1);
     const sigmaEff = Math.max(f / GAUSS_FWHM, 1e-9);
     const gammaEff = Math.max(f / 2, 1e-9);
     return amplitude * (
@@ -134,51 +125,50 @@
 
   function modelY(model, x, params) {
     switch (model) {
-      case 'gaussian':
-        return gaussian(x, params);
-      case 'lorentzian':
-        return lorentzian(x, params);
-      case 'voigt':
-        return pseudoVoigt(x, params);
-      case 'bwf':
-        return bwf(x, params);
-      default:
-        throw new Error(`Unknown model: ${model}`);
+      case 'gaussian': return gaussian(x, params);
+      case 'lorentzian': return lorentzian(x, params);
+      case 'voigt': return pseudoVoigt(x, params);
+      case 'bwf': return bwf(x, params);
+      default: throw new Error(`Unknown model: ${model}`);
     }
   }
 
   function modelKeys(model) {
     switch (model) {
-      case 'gaussian':
-        return ['amplitude', 'center', 'sigma'];
-      case 'lorentzian':
-        return ['amplitude', 'center', 'gamma'];
-      case 'voigt':
-        return ['amplitude', 'center', 'sigma', 'gamma'];
-      case 'bwf':
-        return ['amplitude', 'center', 'gamma', 'q'];
-      default:
-        throw new Error(`Unknown model: ${model}`);
+      case 'gaussian': return ['amplitude', 'center', 'sigma'];
+      case 'lorentzian': return ['amplitude', 'center', 'gamma'];
+      case 'voigt': return ['amplitude', 'center', 'sigma', 'gamma'];
+      case 'bwf': return ['amplitude', 'center', 'gamma', 'q'];
+      default: throw new Error(`Unknown model: ${model}`);
     }
   }
 
-  function vectorToParams(model, vec) {
-    const keys = modelKeys(model);
-    const out = {};
-    keys.forEach((k, i) => {
-      out[k] = vec[i];
-    });
-    return out;
+  function normalizePeakCount(peakCount) {
+    return clamp(Math.round(Number(peakCount) || 1), 1, 6);
   }
 
-  function paramsToVector(model, params) {
-    return modelKeys(model).map((k) => Number(params[k]));
+  function paramsToVector(model, peaks) {
+    const keys = modelKeys(model);
+    return peaks.flatMap((peak) => keys.map((k) => Number(peak[k])));
+  }
+
+  function vectorToPeakParams(model, vec, peakCount) {
+    const keys = modelKeys(model);
+    const normalizedCount = normalizePeakCount(peakCount);
+    const peaks = [];
+    for (let i = 0; i < normalizedCount; i++) {
+      const peak = {};
+      keys.forEach((key, keyIdx) => {
+        peak[key] = vec[i * keys.length + keyIdx];
+      });
+      peaks.push(peak);
+    }
+    return peaks;
   }
 
   function halfMaxWidth(xs, ys, peakIdx, halfHeight) {
     let leftX = xs[0];
     let rightX = xs[xs.length - 1];
-
     for (let i = peakIdx; i > 0; i--) {
       if (ys[i] >= halfHeight && ys[i - 1] <= halfHeight) {
         const t = (halfHeight - ys[i - 1]) / ((ys[i] - ys[i - 1]) || 1);
@@ -186,7 +176,6 @@
         break;
       }
     }
-
     for (let i = peakIdx; i < ys.length - 1; i++) {
       if (ys[i] >= halfHeight && ys[i + 1] <= halfHeight) {
         const t = (halfHeight - ys[i]) / ((ys[i + 1] - ys[i]) || 1);
@@ -194,60 +183,65 @@
         break;
       }
     }
-
     return Math.max(rightX - leftX, (xs[xs.length - 1] - xs[0]) / 12, 1e-6);
   }
 
-  function autoInitialParams(data, options) {
-    const { xMin, xMax, model, subtractBackground, edgeFraction } = options;
-    const points = selectRange(data, xMin, xMax);
-    if (points.length < 5) {
-      throw new Error('選択範囲内の点数が少なすぎます。');
+  function findTopPeaks(xs, ys, peakCount) {
+    const candidates = [];
+    for (let i = 0; i < ys.length; i++) {
+      const left = ys[i - 1] ?? -Infinity;
+      const right = ys[i + 1] ?? -Infinity;
+      if (ys[i] >= left && ys[i] >= right) candidates.push(i);
     }
+    if (!candidates.length) candidates.push(ys.indexOf(Math.max(...ys)));
+    candidates.sort((a, b) => ys[b] - ys[a]);
+    const chosen = [];
+    const minSpacing = Math.max(1, Math.floor(xs.length / (peakCount * 3)));
+    for (const idx of candidates) {
+      if (chosen.every((v) => Math.abs(v - idx) >= minSpacing)) chosen.push(idx);
+      if (chosen.length >= peakCount) break;
+    }
+    for (let i = 0; chosen.length < peakCount && i < ys.length; i++) {
+      const idx = candidates[i] ?? i;
+      if (!chosen.includes(idx)) chosen.push(idx);
+    }
+    return chosen.sort((a, b) => xs[a] - xs[b]);
+  }
+
+  function autoInitialPeaks(data, options) {
+    const { xMin, xMax, model, subtractBackground, edgeFraction, peakCount = 1 } = options;
+    const points = selectRange(data, xMin, xMax);
+    const normalizedCount = normalizePeakCount(peakCount);
+    if (points.length < Math.max(5, normalizedCount * 4)) throw new Error('選択範囲内の点数が少なすぎます。');
     const xs = points.map((p) => p.x);
     const ysRaw = points.map((p) => p.y);
     const bg = subtractBackground
       ? estimateLinearBackground(points, edgeFraction)
-      : {
-          slope: 0,
-          intercept: 0,
-          bgY: new Array(points.length).fill(0),
-          correctedY: ysRaw.slice(),
-        };
+      : { slope: 0, intercept: 0, bgY: new Array(points.length).fill(0), correctedY: ysRaw.slice() };
     const ys = bg.correctedY;
+    const peakIdxs = findTopPeaks(xs, ys, normalizedCount);
+    const peaks = peakIdxs.map((peakIdx) => {
+      const amplitude = Math.max(ys[peakIdx], 1e-3);
+      const center = xs[peakIdx];
+      const fwhm = halfMaxWidth(xs, ys, peakIdx, amplitude / 2);
+      return {
+        amplitude,
+        center,
+        sigma: Math.max(fwhm / GAUSS_FWHM, 1e-4),
+        gamma: Math.max(fwhm / 2, 1e-4),
+        q: -5,
+      };
+    });
+    return peaks.map((peak) => {
+      if (model === 'gaussian') return { amplitude: peak.amplitude, center: peak.center, sigma: peak.sigma };
+      if (model === 'lorentzian') return { amplitude: peak.amplitude, center: peak.center, gamma: peak.gamma };
+      if (model === 'voigt') return { amplitude: peak.amplitude, center: peak.center, sigma: peak.sigma, gamma: peak.gamma };
+      return { amplitude: peak.amplitude, center: peak.center, gamma: peak.gamma, q: peak.q };
+    });
+  }
 
-    let peakIdx = 0;
-    let peakY = ys[0];
-    for (let i = 1; i < ys.length; i++) {
-      if (ys[i] > peakY) {
-        peakY = ys[i];
-        peakIdx = i;
-      }
-    }
-
-    const amplitude = Math.max(peakY, 1e-3);
-    const center = xs[peakIdx];
-    const halfHeight = amplitude / 2;
-    const fwhm = halfMaxWidth(xs, ys, peakIdx, halfHeight);
-
-    const init = {
-      amplitude,
-      center,
-      sigma: Math.max(fwhm / GAUSS_FWHM, 1e-4),
-      gamma: Math.max(fwhm / 2, 1e-4),
-      q: -5,
-    };
-
-    if (model === 'gaussian') {
-      return { amplitude: init.amplitude, center: init.center, sigma: init.sigma };
-    }
-    if (model === 'lorentzian') {
-      return { amplitude: init.amplitude, center: init.center, gamma: init.gamma };
-    }
-    if (model === 'voigt') {
-      return { amplitude: init.amplitude, center: init.center, sigma: init.sigma, gamma: init.gamma };
-    }
-    return { amplitude: init.amplitude, center: init.center, gamma: init.gamma, q: init.q };
+  function autoInitialParams(data, options) {
+    return autoInitialPeaks(data, { ...options, peakCount: 1 })[0];
   }
 
   function centroid(simplex) {
@@ -260,23 +254,10 @@
     return c;
   }
 
-  function addVec(a, b, scale = 1) {
-    return a.map((v, i) => v + scale * b[i]);
-  }
-
-  function subVec(a, b) {
-    return a.map((v, i) => v - b[i]);
-  }
-
-  function mulVec(a, scale) {
-    return a.map((v) => v * scale);
-  }
-
-  function simplexSpread(simplex) {
-    const best = simplex[0].f;
-    const worst = simplex[simplex.length - 1].f;
-    return Math.abs(worst - best);
-  }
+  function addVec(a, b, scale = 1) { return a.map((v, i) => v + scale * b[i]); }
+  function subVec(a, b) { return a.map((v, i) => v - b[i]); }
+  function mulVec(a, scale) { return a.map((v) => v * scale); }
+  function simplexSpread(simplex) { return Math.abs(simplex[simplex.length - 1].f - simplex[0].f); }
 
   function nelderMead(fn, x0, steps, maxIter = 500, tol = 1e-9) {
     const n = x0.length;
@@ -286,34 +267,25 @@
       x[i] += steps[i] || 1;
       simplex.push({ x, f: fn(x) });
     }
-
-    const alpha = 1;
-    const gamma = 2;
-    const rho = 0.5;
-    const sigma = 0.5;
-
+    const alpha = 1, gamma = 2, rho = 0.5, sigma = 0.5;
     let iterations = 0;
     for (; iterations < maxIter; iterations++) {
       simplex.sort((a, b) => a.f - b.f);
       if (simplexSpread(simplex) < tol) break;
-
       const c = centroid(simplex);
       const worst = simplex[n];
       const reflectedX = addVec(c, subVec(c, worst.x), alpha);
       const reflected = { x: reflectedX, f: fn(reflectedX) };
-
       if (reflected.f < simplex[0].f) {
         const expandedX = addVec(c, subVec(reflected.x, c), gamma);
         const expanded = { x: expandedX, f: fn(expandedX) };
         simplex[n] = expanded.f < reflected.f ? expanded : reflected;
         continue;
       }
-
       if (reflected.f < simplex[n - 1].f) {
         simplex[n] = reflected;
         continue;
       }
-
       let contracted;
       if (reflected.f < worst.f) {
         const outsideX = addVec(c, subVec(reflected.x, c), rho);
@@ -322,118 +294,99 @@
         const insideX = addVec(c, subVec(worst.x, c), -rho);
         contracted = { x: insideX, f: fn(insideX) };
       }
-
       if (contracted.f < worst.f) {
         simplex[n] = contracted;
         continue;
       }
-
       const bestX = simplex[0].x;
       for (let i = 1; i < simplex.length; i++) {
         const shrunkX = addVec(bestX, mulVec(subVec(simplex[i].x, bestX), sigma));
         simplex[i] = { x: shrunkX, f: fn(shrunkX) };
       }
     }
-
     simplex.sort((a, b) => a.f - b.f);
     return { x: simplex[0].x.slice(), f: simplex[0].f, iterations, converged: iterations < maxIter };
   }
 
-  function validateParams(model, params, domain) {
+  function validatePeakParams(model, peak, domain) {
     const widthMax = Math.max(domain.width * 2, 1e-3);
-    if (!Number.isFinite(params.amplitude) || params.amplitude <= 0) return false;
-    if (!Number.isFinite(params.center) || params.center < domain.xMin || params.center > domain.xMax) return false;
-    if ('sigma' in params && (!Number.isFinite(params.sigma) || params.sigma <= 0 || params.sigma > widthMax)) return false;
-    if ('gamma' in params && (!Number.isFinite(params.gamma) || params.gamma <= 0 || params.gamma > widthMax)) return false;
-    if ('q' in params && (!Number.isFinite(params.q) || Math.abs(params.q) < 1e-4 || Math.abs(params.q) > 1e4)) return false;
+    if (!Number.isFinite(peak.amplitude) || peak.amplitude <= 0) return false;
+    if (!Number.isFinite(peak.center) || peak.center < domain.xMin || peak.center > domain.xMax) return false;
+    if ('sigma' in peak && (!Number.isFinite(peak.sigma) || peak.sigma <= 0 || peak.sigma > widthMax)) return false;
+    if ('gamma' in peak && (!Number.isFinite(peak.gamma) || peak.gamma <= 0 || peak.gamma > widthMax)) return false;
+    if ('q' in peak && (!Number.isFinite(peak.q) || Math.abs(peak.q) < 1e-4 || Math.abs(peak.q) > 1e4)) return false;
     return true;
   }
 
-  function deriveMetrics(model, params, x, fitY) {
+  function validatePeaks(model, peaks, domain) {
+    return peaks.every((peak) => validatePeakParams(model, peak, domain));
+  }
+
+  function derivePeakMetrics(model, peak, x) {
+    const fitY = x.map((value) => modelY(model, value, peak));
     let fwhm = NaN;
     let area = trapz(x, fitY);
-
     if (model === 'gaussian') {
-      fwhm = GAUSS_FWHM * params.sigma;
-      area = params.amplitude * params.sigma * SQRT_2PI;
+      fwhm = GAUSS_FWHM * peak.sigma;
+      area = peak.amplitude * peak.sigma * SQRT_2PI;
     } else if (model === 'lorentzian') {
-      fwhm = 2 * params.gamma;
-      area = Math.PI * params.amplitude * params.gamma;
+      fwhm = 2 * peak.gamma;
+      area = Math.PI * peak.amplitude * peak.gamma;
     } else if (model === 'voigt') {
-      const fG = GAUSS_FWHM * params.sigma;
-      const fL = 2 * params.gamma;
+      const fG = GAUSS_FWHM * peak.sigma;
+      const fL = 2 * peak.gamma;
       fwhm = 0.5346 * fL + Math.sqrt(0.2166 * fL * fL + fG * fG);
     } else if (model === 'bwf') {
-      fwhm = 2 * params.gamma;
+      fwhm = 2 * peak.gamma;
     }
-
     return { fwhm, area };
   }
 
   function fitSinglePeak(data, options) {
-    const {
-      xMin,
-      xMax,
-      model,
-      subtractBackground = true,
-      edgeFraction = 0.15,
-      initial,
-      maxIter = 600,
-    } = options;
+    return fitMultiPeak(data, { ...options, peakCount: 1, initialPeaks: options.initial ? [options.initial] : undefined });
+  }
 
+  function fitMultiPeak(data, options) {
+    const { xMin, xMax, model, subtractBackground = true, edgeFraction = 0.15, maxIter = 800 } = options;
+    const peakCount = normalizePeakCount(options.peakCount || options.initialPeaks?.length || 1);
     const points = selectRange(data, xMin, xMax);
-    if (points.length < 8) {
-      throw new Error('選択範囲内のデータ点が少なすぎます。');
-    }
-
+    if (points.length < Math.max(8, peakCount * 5)) throw new Error('選択範囲内のデータ点が少なすぎます。');
     const xs = points.map((p) => p.x);
     const ysRaw = points.map((p) => p.y);
     const background = subtractBackground
       ? estimateLinearBackground(points, edgeFraction)
-      : {
-          slope: 0,
-          intercept: 0,
-          bgY: new Array(points.length).fill(0),
-          correctedY: ysRaw.slice(),
-        };
+      : { slope: 0, intercept: 0, bgY: new Array(points.length).fill(0), correctedY: ysRaw.slice() };
     const ys = background.correctedY;
-
-    const domain = {
-      xMin: Math.min(xMin, xMax),
-      xMax: Math.max(xMin, xMax),
-      width: Math.max(Math.abs(xMax - xMin), 1e-6),
-    };
-
-    const startParams = initial || autoInitialParams(data, { xMin, xMax, model, subtractBackground, edgeFraction });
-    const x0 = paramsToVector(model, startParams);
-    const stepBase = {
-      amplitude: Math.max((startParams.amplitude || 1) * 0.15, 1e-3),
-      center: domain.width * 0.03,
-      sigma: Math.max((startParams.sigma || domain.width / 20) * 0.2, domain.width * 1e-4),
-      gamma: Math.max((startParams.gamma || domain.width / 20) * 0.2, domain.width * 1e-4),
-      q: Math.max(Math.abs(startParams.q || 5) * 0.2, 0.25),
-    };
-    const steps = modelKeys(model).map((k) => stepBase[k]);
-
+    const domain = { xMin: Math.min(xMin, xMax), xMax: Math.max(xMin, xMax), width: Math.max(Math.abs(xMax - xMin), 1e-6) };
+    const startPeaks = (options.initialPeaks && options.initialPeaks.length)
+      ? options.initialPeaks.slice(0, peakCount)
+      : autoInitialPeaks(data, { xMin, xMax, model, subtractBackground, edgeFraction, peakCount });
+    const keys = modelKeys(model);
+    const normalizedPeaks = startPeaks.map((peak) => Object.fromEntries(keys.map((k) => [k, Number(peak[k])] )));
+    const x0 = paramsToVector(model, normalizedPeaks);
+    const steps = normalizedPeaks.flatMap((peak) => keys.map((key) => {
+      if (key === 'amplitude') return Math.max((peak.amplitude || 1) * 0.15, 1e-3);
+      if (key === 'center') return domain.width * 0.03;
+      if (key === 'sigma') return Math.max((peak.sigma || domain.width / 20) * 0.2, domain.width * 1e-4);
+      if (key === 'gamma') return Math.max((peak.gamma || domain.width / 20) * 0.2, domain.width * 1e-4);
+      return Math.max(Math.abs(peak.q || 5) * 0.2, 0.25);
+    }));
     const objective = (vec) => {
-      const params = vectorToParams(model, vec);
-      if (!validateParams(model, params, domain)) return 1e18;
+      const peaks = vectorToPeakParams(model, vec, peakCount);
+      if (!validatePeaks(model, peaks, domain)) return 1e18;
       let sse = 0;
       for (let i = 0; i < xs.length; i++) {
-        const pred = modelY(model, xs[i], params);
+        const pred = peaks.reduce((sum, peak) => sum + modelY(model, xs[i], peak), 0);
         const err = ys[i] - pred;
         sse += err * err;
       }
       return sse / xs.length;
     };
-
     const result = nelderMead(objective, x0, steps, maxIter, 1e-10);
-    const params = vectorToParams(model, result.x);
-    if (!validateParams(model, params, domain)) {
-      throw new Error('フィッティングが収束しませんでした。初期値や範囲を見直してください。');
-    }
-
-    const fitYSub = xs.map((x) => modelY(model, x, params));
+    const peaks = vectorToPeakParams(model, result.x, peakCount).sort((a, b) => a.center - b.center);
+    if (!validatePeaks(model, peaks, domain)) throw new Error('フィッティングが収束しませんでした。初期値や範囲を見直してください。');
+    const componentY = peaks.map((peak) => xs.map((x) => modelY(model, x, peak)));
+    const fitYSub = xs.map((_, i) => componentY.reduce((sum, ysPeak) => sum + ysPeak[i], 0));
     const fitYAbs = fitYSub.map((v, i) => v + background.bgY[i]);
     const residuals = ys.map((v, i) => v - fitYSub[i]);
     const mse = mean(residuals.map((v) => v * v));
@@ -442,33 +395,30 @@
     const ssTot = ys.reduce((acc, v) => acc + (v - yMean) ** 2, 0);
     const ssRes = residuals.reduce((acc, v) => acc + v * v, 0);
     const r2 = ssTot > 0 ? 1 - ssRes / ssTot : NaN;
-    const derived = deriveMetrics(model, params, xs, fitYSub);
-
+    const peakMetrics = peaks.map((peak) => derivePeakMetrics(model, peak, xs));
+    const metrics = {
+      rmse, r2, objective: result.f, iterations: result.iterations, converged: result.converged,
+      peakCount,
+      fwhm: peakMetrics.reduce((sum, item) => sum + (item.fwhm || 0), 0),
+      area: peakMetrics.reduce((sum, item) => sum + (item.area || 0), 0),
+    };
     return {
       model,
-      params,
-      metrics: {
-        rmse,
-        r2,
-        objective: result.f,
-        iterations: result.iterations,
-        converged: result.converged,
-        ...derived,
-      },
-      selection: {
-        xMin: domain.xMin,
-        xMax: domain.xMax,
-      },
-      background: {
-        slope: background.slope,
-        intercept: background.intercept,
-      },
+      peakCount,
+      peaks,
+      peakMetrics,
+      params: peaks[0],
+      metrics,
+      selection: { xMin: domain.xMin, xMax: domain.xMax },
+      background: { slope: background.slope, intercept: background.intercept },
       x: xs,
       yRaw: ysRaw,
       yCorrected: ys,
       yBackground: background.bgY,
       yFitSub: fitYSub,
       yFitAbs: fitYAbs,
+      yComponentsAbs: componentY.map((series) => series.map((v, i) => v + background.bgY[i])),
+      yComponentsSub: componentY,
     };
   }
 
@@ -479,31 +429,22 @@
   }
 
   function resultsToCSV(results) {
-    const header = [
-      'file', 'model', 'x_min', 'x_max', 'amplitude', 'center', 'sigma', 'gamma', 'q',
-      'fwhm', 'area', 'rmse', 'r2', 'bg_slope', 'bg_intercept', 'iterations', 'converged'
-    ];
+    const maxPeaks = results.reduce((max, row) => Math.max(max, row.peakCount || row.peaks?.length || 1), 1);
+    const header = ['file', 'model', 'peak_count', 'x_min', 'x_max'];
+    for (let i = 0; i < maxPeaks; i++) {
+      header.push(`peak${i + 1}_amplitude`, `peak${i + 1}_center`, `peak${i + 1}_sigma`, `peak${i + 1}_gamma`, `peak${i + 1}_q`, `peak${i + 1}_fwhm`, `peak${i + 1}_area`);
+    }
+    header.push('total_fwhm', 'total_area', 'rmse', 'r2', 'bg_slope', 'bg_intercept', 'iterations', 'converged');
     const lines = [header.join(',')];
     for (const row of results) {
-      lines.push([
-        row.fileName,
-        row.model,
-        row.selection?.xMin,
-        row.selection?.xMax,
-        row.params?.amplitude,
-        row.params?.center,
-        row.params?.sigma ?? '',
-        row.params?.gamma ?? '',
-        row.params?.q ?? '',
-        row.metrics?.fwhm,
-        row.metrics?.area,
-        row.metrics?.rmse,
-        row.metrics?.r2,
-        row.background?.slope,
-        row.background?.intercept,
-        row.metrics?.iterations,
-        row.metrics?.converged,
-      ].map(csvEscape).join(','));
+      const values = [row.fileName, row.model, row.peakCount || row.peaks?.length || 1, row.selection?.xMin, row.selection?.xMax];
+      for (let i = 0; i < maxPeaks; i++) {
+        const peak = row.peaks?.[i] || {};
+        const metric = row.peakMetrics?.[i] || {};
+        values.push(peak.amplitude ?? '', peak.center ?? '', peak.sigma ?? '', peak.gamma ?? '', peak.q ?? '', metric.fwhm ?? '', metric.area ?? '');
+      }
+      values.push(row.metrics?.fwhm, row.metrics?.area, row.metrics?.rmse, row.metrics?.r2, row.background?.slope, row.background?.intercept, row.metrics?.iterations, row.metrics?.converged);
+      lines.push(values.map(csvEscape).join(','));
     }
     return lines.join('\n');
   }
@@ -513,15 +454,10 @@
     const xs = data.map((p) => p.x);
     const ys = data.map((p) => p.y);
     let maxIdx = 0;
-    for (let i = 1; i < ys.length; i++) {
-      if (ys[i] > ys[maxIdx]) maxIdx = i;
-    }
+    for (let i = 1; i < ys.length; i++) if (ys[i] > ys[maxIdx]) maxIdx = i;
     const span = xs[xs.length - 1] - xs[0];
     const center = xs[maxIdx];
-    return {
-      xMin: Math.max(xs[0], center - span * 0.08),
-      xMax: Math.min(xs[xs.length - 1], center + span * 0.08),
-    };
+    return { xMin: Math.max(xs[0], center - span * 0.08), xMax: Math.min(xs[xs.length - 1], center + span * 0.08) };
   }
 
   return {
@@ -529,10 +465,13 @@
     selectRange,
     estimateLinearBackground,
     autoInitialParams,
+    autoInitialPeaks,
     fitSinglePeak,
+    fitMultiPeak,
     resultsToCSV,
     defaultSelection,
     modelKeys,
     modelY,
+    normalizePeakCount,
   };
 });

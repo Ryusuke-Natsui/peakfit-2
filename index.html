@@ -71,7 +71,15 @@
               <option value="full">x, y_raw, y_background, y_corrected の4列</option>
             </select>
           </label>
-          <div class="hint">ZIP出力時に、背景差し引き後の y 軸だけを残す2列版か、元データと背景も含む4列版を選べます。</div>
+          <label>
+            <span>背景差し引きZIP内の区切り文字</span>
+            <select id="bgZipDelimiter">
+              <option value="comma">カンマ (,)</option>
+              <option value="tab">タブ</option>
+              <option value="space">スペース</option>
+            </select>
+          </label>
+          <div class="hint">ZIP出力時に、背景差し引き後の y 軸だけを残す2列版か、元データと背景も含む4列版を選べます。.txt / .dat を選んだ場合は、区切り文字をカンマ・タブ・スペースから切り替えられます（.csv は常にカンマです）。</div>
         </section>
 
         <section>

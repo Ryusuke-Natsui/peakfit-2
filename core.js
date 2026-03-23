@@ -429,18 +429,37 @@
   }
 
 
+  function delimiterFromMode(mode) {
+    if (mode === 'tab') return '\t';
+    if (mode === 'space') return ' ';
+    return ',';
+  }
+
+  function headerForDelimiter(columns, delimiter) {
+    return columns.join(delimiter);
+  }
+
+  function rowForDelimiter(values, delimiter) {
+    if (delimiter === ',') return values.map(csvEscape).join(delimiter);
+    return values.join(delimiter);
+  }
+
   function backgroundSubtractedToCSV(data, options) {
-    const { xMin, xMax, edgeFraction = 0.15, columnMode = 'full' } = options;
+    const { xMin, xMax, edgeFraction = 0.15, columnMode = 'full', delimiterMode = 'comma' } = options;
     const points = selectRange(data, xMin, xMax);
     if (points.length < 4) throw new Error('背景差し引き範囲の点数が少なすぎます。');
     const background = estimateLinearBackground(points, edgeFraction);
     const normalizedColumnMode = columnMode === 'x_y_corrected' ? 'x_y_corrected' : 'full';
-    const lines = [normalizedColumnMode === 'x_y_corrected' ? 'x,y_corrected' : 'x,y_raw,y_background,y_corrected'];
+    const delimiter = delimiterFromMode(delimiterMode);
+    const headerColumns = normalizedColumnMode === 'x_y_corrected'
+      ? ['x', 'y_corrected']
+      : ['x', 'y_raw', 'y_background', 'y_corrected'];
+    const lines = [headerForDelimiter(headerColumns, delimiter)];
     points.forEach((point, index) => {
       lines.push(
         normalizedColumnMode === 'x_y_corrected'
-          ? [point.x, background.correctedY[index]].join(',')
-          : [point.x, point.y, background.bgY[index], background.correctedY[index]].join(',')
+          ? rowForDelimiter([point.x, background.correctedY[index]], delimiter)
+          : rowForDelimiter([point.x, point.y, background.bgY[index], background.correctedY[index]], delimiter)
       );
     });
     return lines.join('\n');

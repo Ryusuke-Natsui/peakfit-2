@@ -41,6 +41,10 @@ function bindElements() {
   els.fitAllBtn = document.getElementById('fitAllBtn');
   els.subtractAllBtn = document.getElementById('subtractAllBtn');
   els.exportCsvBtn = document.getElementById('exportCsvBtn');
+  els.saveBatchBtn = document.getElementById('saveBatchBtn');
+  els.saveCurrentBtn = document.getElementById('saveCurrentBtn');
+  els.loadCurrentBtn = document.getElementById('loadCurrentBtn');
+  els.loadCurrentInput = document.getElementById('loadCurrentInput');
   els.clearBtn = document.getElementById('clearBtn');
   els.selectionText = document.getElementById('selectionText');
   els.fitInfo = document.getElementById('fitInfo');
@@ -86,6 +90,10 @@ function bindEvents() {
   els.fitAllBtn.addEventListener('click', () => runBatchFit());
   els.subtractAllBtn.addEventListener('click', () => exportBackgroundSubtractedZip());
   els.exportCsvBtn.addEventListener('click', exportCsv);
+  els.saveBatchBtn?.addEventListener('click', exportBatchResultsJson);
+  els.saveCurrentBtn?.addEventListener('click', exportCurrentResultJson);
+  els.loadCurrentBtn?.addEventListener('click', () => els.loadCurrentInput?.click());
+  els.loadCurrentInput?.addEventListener('change', importCurrentResultJson);
   els.clearBtn.addEventListener('click', clearAll);
   window.addEventListener('resize', () => { resizeCanvas(); draw(); });
   bindCanvasSelection();
@@ -373,8 +381,9 @@ function runCurrentFit() {
     const ds = currentDataset();
     ensureReady(ds);
     const setupSnapshot = captureCurrentSetup();
-    const result = PeakFitCore.fitMultiPeak(ds.data, buildFitOptions());
-    state.currentFit = { ...result, fileName: ds.name };
+    const fitOptions = buildFitOptions();
+    const result = PeakFitCore.fitMultiPeak(ds.data, fitOptions);
+    state.currentFit = { ...result, fileName: ds.name, fittingSetup: serializeSetupSnapshot(setupSnapshot) };
     state.trialFit = { fileName: ds.name, setupSnapshot, result: state.currentFit };
     applyPeaksToInputs(state.currentFit.peaks);
     applyConstraintsToInputs(state.currentFit.parameterConstraints);
@@ -448,7 +457,7 @@ async function runBatchFit() {
     for (const ds of state.datasets) {
       const fitOptions = { ...baseOptions, initialPeaks: nextInitialPeaks.map((peak) => ({ ...peak })) };
       const result = PeakFitCore.fitMultiPeak(ds.data, fitOptions);
-      const fullResult = { ...result, fileName: ds.name };
+      const fullResult = { ...result, fileName: ds.name, fittingSetup: serializeSetupSnapshot(fitOptions) };
       results.push(fullResult);
       if (sequentialFit) nextInitialPeaks = fullResult.peaks.map((peak) => ({ ...peak }));
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -521,6 +530,111 @@ async function exportBackgroundSubtractedZip() {
     toast(`${state.datasets.length}件の背景差し引き結果をZIPで出力しました。`);
   } catch (err) {
     toast(err.message || '背景差し引きZIPの作成に失敗しました。', true);
+  }
+}
+
+
+function serializeSetupSnapshot(snapshot) {
+  if (!snapshot) return null;
+  return {
+    model: snapshot.model,
+    peakCount: PeakFitCore.normalizePeakCount(snapshot.peakCount),
+    subtractBackground: Boolean(snapshot.subtractBackground),
+    edgeFraction: Number(snapshot.edgeFraction),
+    selection: snapshot.selection ? { ...snapshot.selection } : null,
+    initialPeaks: (snapshot.initialPeaks || []).map((peak) => ({ ...peak })),
+    parameterConstraints: PeakFitCore.normalizeParameterConstraints(snapshot.model, snapshot.peakCount, snapshot.parameterConstraints),
+  };
+}
+
+function buildBatchExportPayload() {
+  if (!state.batchResults.length) throw new Error('先に一括結果または採用済み結果を作成してください。');
+  return {
+    schemaVersion: 1,
+    type: 'peakfit-batch-results',
+    exportedAt: new Date().toISOString(),
+    app: 'Peak Fitting PWA',
+    activeFileName: currentDataset()?.name || null,
+    datasetNames: state.datasets.map((ds) => ds.name),
+    currentSettings: serializeSetupSnapshot(captureCurrentSetup()),
+    batchResults: state.batchResults.map((result) => JSON.parse(JSON.stringify(result))),
+  };
+}
+
+function buildCurrentResultExportPayload() {
+  const ds = currentDataset();
+  const result = state.currentFit && state.currentFit.fileName === ds?.name ? state.currentFit : null;
+  if (!result?.peaks?.length) throw new Error('保存する個別フィット結果がありません。先に試しフィットまたは一括フィットを実行してください。');
+  const fittingSetup = result.fittingSetup || {
+    model: result.model,
+    peakCount: result.peakCount,
+    subtractBackground: Boolean(els.subtractBg.checked),
+    edgeFraction: Number(els.bgEdgeFraction.value),
+    selection: result.selection ? { ...result.selection } : (state.selection ? { ...state.selection } : null),
+    initialPeaks: result.peaks.map((peak) => ({ ...peak })),
+    parameterConstraints: result.parameterConstraints || collectParameterConstraintsSafe(),
+  };
+  return {
+    schemaVersion: 1,
+    type: 'peakfit-single-result',
+    exportedAt: new Date().toISOString(),
+    app: 'Peak Fitting PWA',
+    fileName: result.fileName || ds?.name || null,
+    fittingSetup: serializeSetupSnapshot(fittingSetup),
+    result: JSON.parse(JSON.stringify(result)),
+  };
+}
+
+function exportBatchResultsJson() {
+  try {
+    const payload = buildBatchExportPayload();
+    downloadBlob(JSON.stringify(payload, null, 2), `peakfit_batch_results_${timestampForFileName()}.json`, 'application/json');
+    toast('全体結果をJSONで保存しました。');
+  } catch (err) {
+    toast(err.message || '全体結果の保存に失敗しました。', true);
+  }
+}
+
+function exportCurrentResultJson() {
+  try {
+    const payload = buildCurrentResultExportPayload();
+    const baseName = sanitizeFileStem(payload.fileName || 'current_result');
+    downloadBlob(JSON.stringify(payload, null, 2), `${baseName}_fit_result.json`, 'application/json');
+    toast('個別結果をJSONで保存しました。');
+  } catch (err) {
+    toast(err.message || '個別結果の保存に失敗しました。', true);
+  }
+}
+
+async function importCurrentResultJson(event) {
+  const file = event.target?.files?.[0];
+  if (!file) return;
+  try {
+    const payload = JSON.parse(await file.text());
+    if (payload?.type !== 'peakfit-single-result') throw new Error('個別結果JSONではありません。');
+    const setup = serializeSetupSnapshot(payload.fittingSetup);
+    if (!setup?.selection || !Array.isArray(setup.initialPeaks) || !setup.initialPeaks.length) throw new Error('読み込みに必要なフィット条件が不足しています。');
+    applySetupSnapshot(setup);
+    if (typeof payload.fileName === 'string' && payload.fileName) {
+      const datasetIndex = state.datasets.findIndex((ds) => ds.name === payload.fileName);
+      if (datasetIndex >= 0) {
+        state.activeIndex = datasetIndex;
+        if (els.datasetSelect) els.datasetSelect.value = String(datasetIndex);
+      }
+    }
+    state.currentFit = payload.result && payload.result.fileName === currentDataset()?.name ? payload.result : null;
+    state.trialFit = null;
+    renderFitInfo(state.currentFit);
+    renderTrialStatus();
+    renderResultsTable();
+    draw();
+    toast(payload.fileName && state.currentFit
+      ? `個別結果を読み込みました。${payload.fileName} と同じ条件で再フィットできます。`
+      : '個別結果を読み込みました。同じ条件で再フィットできます。');
+  } catch (err) {
+    toast(err.message || '個別結果の読み込みに失敗しました。', true);
+  } finally {
+    if (event.target) event.target.value = '';
   }
 }
 
@@ -828,6 +942,14 @@ function buildBackgroundOutputName(fileName, extension = 'csv') {
   const dot = fileName.lastIndexOf('.');
   if (dot <= 0) return `${fileName}_bgsub.${normalizedExtension}`;
   return `${fileName.slice(0, dot)}_bgsub.${normalizedExtension}`;
+}
+
+function sanitizeFileStem(name) {
+  return String(name || 'peakfit').replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'peakfit';
+}
+
+function timestampForFileName() {
+  return new Date().toISOString().replace(/[:.]/g, '-');
 }
 
 function syncBackgroundDelimiterAvailability() {

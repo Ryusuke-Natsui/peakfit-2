@@ -191,20 +191,74 @@
     return clamp(Math.round(Number(peakCount) || 1), 1, 6);
   }
 
-  function paramsToVector(model, peaks) {
+  function normalizeParameterConstraints(model, peakCount, constraints = {}) {
     const keys = modelKeys(model);
-    return peaks.flatMap((peak) => keys.map((k) => Number(peak[k])));
+    const normalizedCount = normalizePeakCount(peakCount);
+    const perPeak = [];
+    for (let i = 0; i < normalizedCount; i++) {
+      const source = constraints.perPeak?.[i] || {};
+      const peakConstraint = {};
+      for (const key of keys) {
+        const sharedGroupRaw = source[key]?.sharedGroup ?? '';
+        const sharedGroup = String(sharedGroupRaw).trim();
+        peakConstraint[key] = {
+          fixed: Boolean(source[key]?.fixed),
+          sharedGroup,
+        };
+      }
+      perPeak.push(peakConstraint);
+    }
+    return { perPeak };
   }
 
-  function vectorToPeakParams(model, vec, peakCount) {
+  function createConstraintMapping(model, peakCount, constraints = {}) {
+    const keys = modelKeys(model);
+    const normalized = normalizeParameterConstraints(model, peakCount, constraints);
+    const sharedOwners = new Map();
+    const descriptors = [];
+    const descriptorIndexByKey = new Map();
+    for (let peakIndex = 0; peakIndex < normalized.perPeak.length; peakIndex++) {
+      for (const key of keys) {
+        const spec = normalized.perPeak[peakIndex][key];
+        const mapKey = `${peakIndex}:${key}`;
+        if (spec.fixed) {
+          descriptorIndexByKey.set(mapKey, null);
+          continue;
+        }
+        if (spec.sharedGroup) {
+          const sharedKey = `${key}:${spec.sharedGroup}`;
+          if (sharedOwners.has(sharedKey)) {
+            descriptorIndexByKey.set(mapKey, sharedOwners.get(sharedKey));
+            continue;
+          }
+          const descriptorIndex = descriptors.length;
+          descriptors.push({ peakIndex, key, sharedGroup: spec.sharedGroup });
+          sharedOwners.set(sharedKey, descriptorIndex);
+          descriptorIndexByKey.set(mapKey, descriptorIndex);
+          continue;
+        }
+        const descriptorIndex = descriptors.length;
+        descriptors.push({ peakIndex, key, sharedGroup: '' });
+        descriptorIndexByKey.set(mapKey, descriptorIndex);
+      }
+    }
+    return { normalized, descriptors, descriptorIndexByKey };
+  }
+
+  function buildOptimizationVector(model, peaks, constraintMapping) {
+    return constraintMapping.descriptors.map(({ peakIndex, key }) => Number(peaks[peakIndex]?.[key]));
+  }
+
+  function optimizationVectorToPeaks(model, basePeaks, vec, constraintMapping, peakCount) {
     const keys = modelKeys(model);
     const normalizedCount = normalizePeakCount(peakCount);
     const peaks = [];
     for (let i = 0; i < normalizedCount; i++) {
       const peak = {};
-      keys.forEach((key, keyIdx) => {
-        peak[key] = vec[i * keys.length + keyIdx];
-      });
+      for (const key of keys) {
+        const descriptorIndex = constraintMapping.descriptorIndexByKey.get(`${i}:${key}`);
+        peak[key] = descriptorIndex == null ? Number(basePeaks[i]?.[key]) : vec[descriptorIndex];
+      }
       peaks.push(peak);
     }
     return peaks;
@@ -412,16 +466,18 @@
       : autoInitialPeaks(data, { xMin, xMax, model, subtractBackground, edgeFraction, peakCount });
     const keys = modelKeys(model);
     const normalizedPeaks = startPeaks.map((peak) => Object.fromEntries(keys.map((k) => [k, Number(peak[k])] )));
-    const x0 = paramsToVector(model, normalizedPeaks);
-    const steps = normalizedPeaks.flatMap((peak) => keys.map((key) => {
+    const constraintMapping = createConstraintMapping(model, peakCount, options.parameterConstraints);
+    const x0 = buildOptimizationVector(model, normalizedPeaks, constraintMapping);
+    const steps = constraintMapping.descriptors.map(({ peakIndex, key }) => {
+      const peak = normalizedPeaks[peakIndex] || {};
       if (key === 'amplitude') return Math.max((peak.amplitude || 1) * 0.15, 1e-3);
       if (key === 'center') return domain.width * 0.03;
       if (key === 'sigma') return Math.max((peak.sigma || domain.width / 20) * 0.2, domain.width * 1e-4);
       if (key === 'gamma') return Math.max((peak.gamma || domain.width / 20) * 0.2, domain.width * 1e-4);
       return Math.max(Math.abs(peak.q || 5) * 0.2, 0.25);
-    }));
+    });
     const objective = (vec) => {
-      const peaks = vectorToPeakParams(model, vec, peakCount);
+      const peaks = optimizationVectorToPeaks(model, normalizedPeaks, vec, constraintMapping, peakCount);
       if (!validatePeaks(model, peaks, domain)) return 1e18;
       let sse = 0;
       for (let i = 0; i < xs.length; i++) {
@@ -431,8 +487,8 @@
       }
       return sse / xs.length;
     };
-    const result = nelderMead(objective, x0, steps, maxIter, 1e-10);
-    const peaks = vectorToPeakParams(model, result.x, peakCount).sort((a, b) => a.center - b.center);
+    const result = x0.length ? nelderMead(objective, x0, steps, maxIter, 1e-10) : { x: [], f: objective([]), iterations: 0, converged: true };
+    const peaks = optimizationVectorToPeaks(model, normalizedPeaks, result.x, constraintMapping, peakCount).sort((a, b) => a.center - b.center);
     if (!validatePeaks(model, peaks, domain)) throw new Error('フィッティングが収束しませんでした。初期値や範囲を見直してください。');
     const componentY = peaks.map((peak) => xs.map((x) => modelY(model, x, peak)));
     const fitYSub = xs.map((_, i) => componentY.reduce((sum, ysPeak) => sum + ysPeak[i], 0));
@@ -458,6 +514,7 @@
       peakMetrics,
       params: peaks[0],
       metrics,
+      parameterConstraints: constraintMapping.normalized,
       selection: { xMin: domain.xMin, xMax: domain.xMax },
       background: { slope: background.slope, intercept: background.intercept },
       x: xs,
@@ -476,7 +533,6 @@
     if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
     return s;
   }
-
 
   function delimiterFromMode(mode) {
     if (mode === 'tab') return '\t';
@@ -575,11 +631,23 @@
     return new Blob([...localParts, ...centralParts, end], { type: 'application/zip' });
   }
 
+  function serializeConstraint(constraint) {
+    if (!constraint) return '';
+    const bits = [];
+    if (constraint.fixed) bits.push('fixed');
+    if (constraint.sharedGroup) bits.push(`shared:${constraint.sharedGroup}`);
+    return bits.join('|');
+  }
+
   function resultsToCSV(results) {
     const maxPeaks = results.reduce((max, row) => Math.max(max, row.peakCount || row.peaks?.length || 1), 1);
     const header = ['file', 'model', 'peak_count', 'x_min', 'x_max'];
     for (let i = 0; i < maxPeaks; i++) {
-      header.push(`peak${i + 1}_amplitude`, `peak${i + 1}_center`, `peak${i + 1}_sigma`, `peak${i + 1}_gamma`, `peak${i + 1}_q`, `peak${i + 1}_fwhm`, `peak${i + 1}_area`);
+      header.push(
+        `peak${i + 1}_amplitude`, `peak${i + 1}_center`, `peak${i + 1}_sigma`, `peak${i + 1}_gamma`, `peak${i + 1}_q`,
+        `peak${i + 1}_amplitude_constraint`, `peak${i + 1}_center_constraint`, `peak${i + 1}_sigma_constraint`, `peak${i + 1}_gamma_constraint`, `peak${i + 1}_q_constraint`,
+        `peak${i + 1}_fwhm`, `peak${i + 1}_area`
+      );
     }
     header.push('total_fwhm', 'total_area', 'rmse', 'r2', 'bg_slope', 'bg_intercept', 'iterations', 'converged');
     const lines = [header.join(',')];
@@ -588,7 +656,12 @@
       for (let i = 0; i < maxPeaks; i++) {
         const peak = row.peaks?.[i] || {};
         const metric = row.peakMetrics?.[i] || {};
-        values.push(peak.amplitude ?? '', peak.center ?? '', peak.sigma ?? '', peak.gamma ?? '', peak.q ?? '', metric.fwhm ?? '', metric.area ?? '');
+        const constraints = row.parameterConstraints?.perPeak?.[i] || {};
+        values.push(
+          peak.amplitude ?? '', peak.center ?? '', peak.sigma ?? '', peak.gamma ?? '', peak.q ?? '',
+          serializeConstraint(constraints.amplitude), serializeConstraint(constraints.center), serializeConstraint(constraints.sigma), serializeConstraint(constraints.gamma), serializeConstraint(constraints.q),
+          metric.fwhm ?? '', metric.area ?? ''
+        );
       }
       values.push(row.metrics?.fwhm, row.metrics?.area, row.metrics?.rmse, row.metrics?.r2, row.background?.slope, row.background?.intercept, row.metrics?.iterations, row.metrics?.converged);
       lines.push(values.map(csvEscape).join(','));
@@ -622,5 +695,6 @@
     modelKeys,
     modelY,
     normalizePeakCount,
+    normalizeParameterConstraints,
   };
 });

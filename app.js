@@ -83,6 +83,7 @@ function renderPeakInputs() {
   const model = els.model?.value || 'gaussian';
   const keys = PeakFitCore.modelKeys(model);
   const existing = collectInitialPeaksSafe();
+  const existingConstraints = collectParameterConstraintsSafe();
   const amplitudeLabel = model === 'voigt' ? 'Area (A)' : 'Amplitude';
   const sigmaLabel = model === 'voigt' ? 'wG' : 'σ';
   const gammaLabel = model === 'bwf' ? 'w' : (model === 'voigt' ? 'wL' : 'γ');
@@ -103,10 +104,11 @@ function renderPeakInputs() {
     `;
     els.peakInputs.appendChild(card);
   }
+  applyConstraintsToInputs(existingConstraints);
 }
 
 function buildPeakInput(key, label, index, value) {
-  return `<label data-param="${key}"><span>${label}</span><input data-peak-index="${index}" data-param-key="${key}" type="number" step="any" value="${escapeHtml(String(value))}" /></label>`;
+  return `<label data-param="${key}" class="param-field"><span>${label}</span><input data-peak-index="${index}" data-param-key="${key}" type="number" step="any" value="${escapeHtml(String(value))}" /><span class="constraint-row"><label class="constraint-check"><input data-peak-index="${index}" data-param-key="${key}" data-constraint-kind="fixed" type="checkbox" />固定</label><input data-peak-index="${index}" data-param-key="${key}" data-constraint-kind="sharedGroup" type="text" placeholder="共有ID" /></span></label>`;
 }
 
 function bindCanvasSelection() {
@@ -195,11 +197,33 @@ function buildFitOptions() {
     subtractBackground: els.subtractBg.checked,
     edgeFraction: Number(els.bgEdgeFraction.value),
     initialPeaks: collectInitialPeaks(),
+    parameterConstraints: collectParameterConstraints(),
   };
 }
 
 function collectInitialPeaksSafe() {
   try { return collectInitialPeaks(); } catch { return []; }
+}
+
+function collectParameterConstraintsSafe() {
+  try { return collectParameterConstraints(); } catch { return { perPeak: [] }; }
+}
+
+function collectParameterConstraints() {
+  const peakCount = PeakFitCore.normalizePeakCount(els.peakCount.value);
+  const model = els.model.value;
+  const keys = PeakFitCore.modelKeys(model);
+  const perPeak = [];
+  for (let i = 0; i < peakCount; i++) {
+    const peakConstraints = {};
+    for (const key of keys) {
+      const fixed = els.peakInputs.querySelector(`[data-peak-index="${i}"][data-param-key="${key}"][data-constraint-kind="fixed"]`)?.checked || false;
+      const sharedGroup = (els.peakInputs.querySelector(`[data-peak-index="${i}"][data-param-key="${key}"][data-constraint-kind="sharedGroup"]`)?.value || '').trim();
+      peakConstraints[key] = { fixed, sharedGroup };
+    }
+    perPeak.push(peakConstraints);
+  }
+  return PeakFitCore.normalizeParameterConstraints(model, peakCount, { perPeak });
 }
 
 function collectInitialPeaks() {
@@ -228,6 +252,18 @@ function getSequentialSeedPeaksForDataset(datasetIndex) {
   const peakCount = PeakFitCore.normalizePeakCount(els.peakCount.value);
   if (!Array.isArray(previousResult.peaks) || previousResult.peaks.length !== peakCount) return null;
   return previousResult.peaks.map((peak) => ({ ...peak }));
+}
+
+function applyConstraintsToInputs(parameterConstraints) {
+  const normalized = PeakFitCore.normalizeParameterConstraints(els.model.value, PeakFitCore.normalizePeakCount(els.peakCount.value), parameterConstraints);
+  normalized.perPeak.forEach((peakConstraints, i) => {
+    Object.entries(peakConstraints).forEach(([key, constraint]) => {
+      const fixed = els.peakInputs.querySelector(`[data-peak-index="${i}"][data-param-key="${key}"][data-constraint-kind="fixed"]`);
+      const sharedGroup = els.peakInputs.querySelector(`[data-peak-index="${i}"][data-param-key="${key}"][data-constraint-kind="sharedGroup"]`);
+      if (fixed) fixed.checked = Boolean(constraint.fixed);
+      if (sharedGroup) sharedGroup.value = constraint.sharedGroup || '';
+    });
+  });
 }
 
 function applyPeaksToInputs(peaks) {
@@ -275,6 +311,7 @@ function runCurrentFit() {
     const result = PeakFitCore.fitMultiPeak(ds.data, buildFitOptions());
     state.currentFit = { ...result, fileName: ds.name };
     applyPeaksToInputs(state.currentFit.peaks);
+    applyConstraintsToInputs(state.currentFit.parameterConstraints);
     upsertBatchResult(state.currentFit);
     renderFitInfo(state.currentFit);
     renderResultsTable();
@@ -306,7 +343,10 @@ async function runBatchFit() {
     renderFitInfo(state.currentFit);
     renderResultsTable();
     draw();
-    if (state.currentFit?.peaks?.length) applyPeaksToInputs(state.currentFit.peaks);
+    if (state.currentFit?.peaks?.length) {
+      applyPeaksToInputs(state.currentFit.peaks);
+      applyConstraintsToInputs(state.currentFit.parameterConstraints);
+    }
     toast(sequentialFit
       ? `${results.length}件のファイルを順次、直前のフィット結果を引き継いで一括フィットしました。`
       : `${results.length}件のファイルを同一初期条件で一括フィットしました。`);
@@ -403,14 +443,23 @@ function renderFitInfo(result) {
   }
   const peaksHtml = result.peaks.map((peak, index) => {
     const metrics = result.peakMetrics[index];
+    const constraints = result.parameterConstraints?.perPeak?.[index] || {};
+    const constraintLabel = (key) => {
+      const spec = constraints[key];
+      if (!spec) return '';
+      if (spec.fixed && spec.sharedGroup) return `固定 / 共有:${escapeHtml(spec.sharedGroup)}`;
+      if (spec.fixed) return '固定';
+      if (spec.sharedGroup) return `共有:${escapeHtml(spec.sharedGroup)}`;
+      return '';
+    };
     return `
       <div class="peak-result">
         <div><strong>Peak ${index + 1}</strong></div>
-        <div>中心: ${formatNumber(peak.center)}</div>
-        <div>${result.model === 'voigt' ? '面積 A' : '振幅'}: ${formatNumber(peak.amplitude)}</div>
-        ${peak.sigma != null ? `<div>${result.model === 'voigt' ? 'wG' : 'σ'}: ${formatNumber(peak.sigma)}</div>` : ''}
-        ${peak.gamma != null ? `<div>${result.model === 'bwf' ? 'w' : (result.model === 'voigt' ? 'wL' : 'γ')}: ${formatNumber(peak.gamma)}</div>` : ''}
-        ${peak.q != null ? `<div>q: ${formatNumber(peak.q)}</div>` : ''}
+        <div>中心: ${formatNumber(peak.center)}${constraintLabel('center') ? ` <span class="constraint-pill">${constraintLabel('center')}</span>` : ''}</div>
+        <div>${result.model === 'voigt' ? '面積 A' : '振幅'}: ${formatNumber(peak.amplitude)}${constraintLabel('amplitude') ? ` <span class="constraint-pill">${constraintLabel('amplitude')}</span>` : ''}</div>
+        ${peak.sigma != null ? `<div>${result.model === 'voigt' ? 'wG' : 'σ'}: ${formatNumber(peak.sigma)}${constraintLabel('sigma') ? ` <span class="constraint-pill">${constraintLabel('sigma')}</span>` : ''}</div>` : ''}
+        ${peak.gamma != null ? `<div>${result.model === 'bwf' ? 'w' : (result.model === 'voigt' ? 'wL' : 'γ')}: ${formatNumber(peak.gamma)}${constraintLabel('gamma') ? ` <span class="constraint-pill">${constraintLabel('gamma')}</span>` : ''}</div>` : ''}
+        ${peak.q != null ? `<div>q: ${formatNumber(peak.q)}${constraintLabel('q') ? ` <span class="constraint-pill">${constraintLabel('q')}</span>` : ''}</div>` : ''}
         <div>FWHM: ${formatNumber(metrics.fwhm)}</div>
         <div>面積: ${formatNumber(metrics.area)}</div>
       </div>`;

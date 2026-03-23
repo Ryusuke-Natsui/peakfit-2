@@ -82,6 +82,14 @@ function bindEvents() {
     draw();
   });
   els.bgZipExtension.addEventListener('change', syncBackgroundDelimiterAvailability);
+  els.peakInputs.addEventListener('change', (event) => {
+    if (event.target?.matches('[data-peak-model]')) {
+      state.trialFit = null;
+      renderPeakInputs();
+      renderTrialStatus();
+      draw();
+    }
+  });
   els.sequentialFit?.addEventListener('change', () => { state.trialFit = null; syncInitialInputsForActiveDataset(); renderTrialStatus(); });
   els.autoInitBtn.addEventListener('click', () => { state.trialFit = null; syncInitialInputsFromSelectionEstimate(true); renderTrialStatus(); });
   els.fitCurrentBtn.addEventListener('click', () => runCurrentFit());
@@ -101,21 +109,24 @@ function bindEvents() {
 
 function renderPeakInputs() {
   const peakCount = PeakFitCore.normalizePeakCount(els.peakCount?.value || 1);
-  const model = els.model?.value || 'gaussian';
-  const keys = PeakFitCore.modelKeys(model);
+  const defaultModel = els.model?.value || 'gaussian';
+  const peakModels = collectPeakModelsSafe();
   const existing = collectInitialPeaksSafe();
   const existingConstraints = collectParameterConstraintsSafe();
-  const amplitudeLabel = model === 'voigt' ? 'Area (A)' : 'Amplitude';
-  const sigmaLabel = model === 'voigt' ? 'wG' : 'σ';
-  const gammaLabel = model === 'bwf' ? 'w' : (model === 'voigt' ? 'wL' : 'γ');
   els.peakInputs.innerHTML = '';
   for (let i = 0; i < peakCount; i++) {
+    const peakModel = peakModels[i] || defaultModel;
+    const keys = PeakFitCore.modelKeys(peakModel);
+    const amplitudeLabel = peakModel === 'voigt' ? 'Area (A)' : 'Amplitude';
+    const sigmaLabel = peakModel === 'voigt' ? 'wG' : 'σ';
+    const gammaLabel = peakModel === 'bwf' ? 'w' : (peakModel === 'voigt' ? 'wL' : 'γ');
     const peak = existing[i] || {};
     const card = document.createElement('div');
     card.className = 'peak-card';
     card.innerHTML = `
       <div class="peak-card-title">Peak ${i + 1}</div>
       <div class="grid2 peak-grid">
+        ${buildPeakModelInput(i, peakModel)}
         ${buildPeakInput('amplitude', amplitudeLabel, i, peak.amplitude ?? '')}
         ${buildPeakInput('center', 'Center', i, peak.center ?? '')}
         ${keys.includes('sigma') ? buildPeakInput('sigma', sigmaLabel, i, peak.sigma ?? '') : ''}
@@ -126,6 +137,10 @@ function renderPeakInputs() {
     els.peakInputs.appendChild(card);
   }
   applyConstraintsToInputs(existingConstraints);
+}
+
+function buildPeakModelInput(index, value) {
+  return `<label class="param-field peak-model-field"><span>Fit function</span><select data-peak-index="${index}" data-peak-model>${['gaussian','lorentzian','voigt','bwf'].map((model) => `<option value="${model}"${model === value ? ' selected' : ''}>${escapeHtml(labelForModel(model))}</option>`).join('')}</select></label>`;
 }
 
 function buildPeakInput(key, label, index, value) {
@@ -218,6 +233,7 @@ function buildFitOptions() {
     xMax: state.selection.xMax,
     model: els.model.value,
     peakCount: PeakFitCore.normalizePeakCount(els.peakCount.value),
+    peakModels: collectPeakModels(),
     subtractBackground: els.subtractBg.checked,
     edgeFraction: Number(els.bgEdgeFraction.value),
     initialPeaks: collectInitialPeaks(),
@@ -229,34 +245,48 @@ function collectInitialPeaksSafe() {
   try { return collectInitialPeaks(); } catch { return []; }
 }
 
+
+function collectPeakModelsSafe() {
+  try { return collectPeakModels(); } catch { return PeakFitCore.normalizePeakModels(els.model.value, PeakFitCore.normalizePeakCount(els.peakCount.value)); }
+}
+
+function collectPeakModels() {
+  const peakCount = PeakFitCore.normalizePeakCount(els.peakCount.value);
+  const peakModels = [];
+  for (let i = 0; i < peakCount; i++) {
+    const value = els.peakInputs.querySelector(`[data-peak-index="${i}"][data-peak-model]`)?.value || els.model.value;
+    peakModels.push(value);
+  }
+  return PeakFitCore.normalizePeakModels(els.model.value, peakCount, peakModels);
+}
+
 function collectParameterConstraintsSafe() {
   try { return collectParameterConstraints(); } catch { return { perPeak: [] }; }
 }
 
 function collectParameterConstraints() {
   const peakCount = PeakFitCore.normalizePeakCount(els.peakCount.value);
-  const model = els.model.value;
-  const keys = PeakFitCore.modelKeys(model);
+  const peakModels = collectPeakModels();
   const perPeak = [];
   for (let i = 0; i < peakCount; i++) {
     const peakConstraints = {};
-    for (const key of keys) {
+    for (const key of PeakFitCore.modelKeys(peakModels[i])) {
       const fixed = els.peakInputs.querySelector(`[data-peak-index="${i}"][data-param-key="${key}"][data-constraint-kind="fixed"]`)?.checked || false;
       const sharedGroup = (els.peakInputs.querySelector(`[data-peak-index="${i}"][data-param-key="${key}"][data-constraint-kind="sharedGroup"]`)?.value || '').trim();
       peakConstraints[key] = { fixed, sharedGroup };
     }
     perPeak.push(peakConstraints);
   }
-  return PeakFitCore.normalizeParameterConstraints(model, peakCount, { perPeak });
+  return PeakFitCore.normalizeParameterConstraints(els.model.value, peakCount, { perPeak }, peakModels);
 }
 
 function collectInitialPeaks() {
   const peakCount = PeakFitCore.normalizePeakCount(els.peakCount.value);
-  const keys = PeakFitCore.modelKeys(els.model.value);
+  const peakModels = collectPeakModels();
   const peaks = [];
   for (let i = 0; i < peakCount; i++) {
     const peak = {};
-    for (const key of keys) {
+    for (const key of PeakFitCore.modelKeys(peakModels[i])) {
       const input = els.peakInputs.querySelector(`[data-peak-index="${i}"][data-param-key="${key}"]`);
       const value = Number(input?.value);
       if (!Number.isFinite(value)) throw new Error(`Peak ${i + 1} の ${key} を入力してください。`);
@@ -272,14 +302,17 @@ function getSequentialSeedPeaksForDataset(datasetIndex) {
   const previousName = state.datasets[datasetIndex - 1]?.name;
   if (!previousName) return null;
   const previousResult = state.batchResults.find((result) => result.fileName === previousName);
-  if (!previousResult || previousResult.model !== els.model.value) return null;
+  if (!previousResult) return null;
   const peakCount = PeakFitCore.normalizePeakCount(els.peakCount.value);
   if (!Array.isArray(previousResult.peaks) || previousResult.peaks.length !== peakCount) return null;
-  return previousResult.peaks.map((peak) => ({ ...peak }));
+  return {
+    peaks: previousResult.peaks.map((peak) => ({ ...peak })),
+    peakModels: PeakFitCore.normalizePeakModels(els.model.value, peakCount, previousResult.peakModels || [previousResult.model]),
+  };
 }
 
 function applyConstraintsToInputs(parameterConstraints) {
-  const normalized = PeakFitCore.normalizeParameterConstraints(els.model.value, PeakFitCore.normalizePeakCount(els.peakCount.value), parameterConstraints);
+  const normalized = PeakFitCore.normalizeParameterConstraints(els.model.value, PeakFitCore.normalizePeakCount(els.peakCount.value), parameterConstraints, collectPeakModelsSafe());
   normalized.perPeak.forEach((peakConstraints, i) => {
     Object.entries(peakConstraints).forEach(([key, constraint]) => {
       const fixed = els.peakInputs.querySelector(`[data-peak-index="${i}"][data-param-key="${key}"][data-constraint-kind="fixed"]`);
@@ -287,6 +320,13 @@ function applyConstraintsToInputs(parameterConstraints) {
       if (fixed) fixed.checked = Boolean(constraint.fixed);
       if (sharedGroup) sharedGroup.value = constraint.sharedGroup || '';
     });
+  });
+}
+
+function applyPeakModelsToInputs(peakModels) {
+  PeakFitCore.normalizePeakModels(els.model.value, PeakFitCore.normalizePeakCount(els.peakCount.value), peakModels).forEach((peakModel, i) => {
+    const input = els.peakInputs.querySelector(`[data-peak-index="${i}"][data-peak-model]`);
+    if (input) input.value = peakModel;
   });
 }
 
@@ -300,9 +340,12 @@ function applyPeaksToInputs(peaks) {
 }
 
 function syncInitialInputsForActiveDataset(forceToast = false) {
-  const seedPeaks = getSequentialSeedPeaksForDataset(state.activeIndex);
-  if (seedPeaks) {
-    applyPeaksToInputs(seedPeaks);
+  const seedData = getSequentialSeedPeaksForDataset(state.activeIndex);
+  if (seedData) {
+    renderPeakInputs();
+    applyPeakModelsToInputs(seedData.peakModels);
+    renderPeakInputs();
+    applyPeaksToInputs(seedData.peaks);
     if (forceToast) toast('直前ファイルのフィット結果を初期値として引き継ぎました。');
     return;
   }
@@ -318,6 +361,7 @@ function syncInitialInputsFromSelectionEstimate(forceToast = false) {
       xMax: state.selection.xMax,
       model: els.model.value,
       peakCount: PeakFitCore.normalizePeakCount(els.peakCount.value),
+      peakModels: collectPeakModels(),
       subtractBackground: els.subtractBg.checked,
       edgeFraction: Number(els.bgEdgeFraction.value),
     });
@@ -332,6 +376,7 @@ function captureCurrentSetup() {
   return {
     model: els.model.value,
     peakCount: PeakFitCore.normalizePeakCount(els.peakCount.value),
+    peakModels: collectPeakModels(),
     subtractBackground: Boolean(els.subtractBg.checked),
     edgeFraction: Number(els.bgEdgeFraction.value),
     selection: state.selection ? { ...state.selection } : null,
@@ -347,6 +392,8 @@ function applySetupSnapshot(snapshot) {
   els.subtractBg.checked = Boolean(snapshot.subtractBackground);
   els.bgEdgeFraction.value = String(snapshot.edgeFraction);
   state.selection = snapshot.selection ? { ...snapshot.selection } : state.selection;
+  renderPeakInputs();
+  applyPeakModelsToInputs(snapshot.peakModels || [snapshot.model]);
   renderPeakInputs();
   applyPeaksToInputs(snapshot.initialPeaks || []);
   applyConstraintsToInputs(snapshot.parameterConstraints);
@@ -542,8 +589,9 @@ function serializeSetupSnapshot(snapshot) {
     subtractBackground: Boolean(snapshot.subtractBackground),
     edgeFraction: Number(snapshot.edgeFraction),
     selection: snapshot.selection ? { ...snapshot.selection } : null,
+    peakModels: PeakFitCore.normalizePeakModels(snapshot.model, snapshot.peakCount, snapshot.peakModels),
     initialPeaks: (snapshot.initialPeaks || []).map((peak) => ({ ...peak })),
-    parameterConstraints: PeakFitCore.normalizeParameterConstraints(snapshot.model, snapshot.peakCount, snapshot.parameterConstraints),
+    parameterConstraints: PeakFitCore.normalizeParameterConstraints(snapshot.model, snapshot.peakCount, snapshot.parameterConstraints, snapshot.peakModels),
   };
 }
 
@@ -678,6 +726,7 @@ function renderFitInfo(result) {
   const peaksHtml = result.peaks.map((peak, index) => {
     const metrics = result.peakMetrics[index];
     const constraints = result.parameterConstraints?.perPeak?.[index] || {};
+    const peakModel = result.peakModels?.[index] || result.model;
     const constraintLabel = (key) => {
       const spec = constraints[key];
       if (!spec) return '';
@@ -688,11 +737,11 @@ function renderFitInfo(result) {
     };
     return `
       <div class="peak-result">
-        <div><strong>Peak ${index + 1}</strong></div>
+        <div><strong>Peak ${index + 1}</strong> <span class="constraint-pill">${escapeHtml(labelForModel(peakModel))}</span></div>
         <div>中心: ${formatNumber(peak.center)}${constraintLabel('center') ? ` <span class="constraint-pill">${constraintLabel('center')}</span>` : ''}</div>
-        <div>${result.model === 'voigt' ? '面積 A' : '振幅'}: ${formatNumber(peak.amplitude)}${constraintLabel('amplitude') ? ` <span class="constraint-pill">${constraintLabel('amplitude')}</span>` : ''}</div>
-        ${peak.sigma != null ? `<div>${result.model === 'voigt' ? 'wG' : 'σ'}: ${formatNumber(peak.sigma)}${constraintLabel('sigma') ? ` <span class="constraint-pill">${constraintLabel('sigma')}</span>` : ''}</div>` : ''}
-        ${peak.gamma != null ? `<div>${result.model === 'bwf' ? 'w' : (result.model === 'voigt' ? 'wL' : 'γ')}: ${formatNumber(peak.gamma)}${constraintLabel('gamma') ? ` <span class="constraint-pill">${constraintLabel('gamma')}</span>` : ''}</div>` : ''}
+        <div>${peakModel === 'voigt' ? '面積 A' : '振幅'}: ${formatNumber(peak.amplitude)}${constraintLabel('amplitude') ? ` <span class="constraint-pill">${constraintLabel('amplitude')}</span>` : ''}</div>
+        ${peak.sigma != null ? `<div>${peakModel === 'voigt' ? 'wG' : 'σ'}: ${formatNumber(peak.sigma)}${constraintLabel('sigma') ? ` <span class="constraint-pill">${constraintLabel('sigma')}</span>` : ''}</div>` : ''}
+        ${peak.gamma != null ? `<div>${peakModel === 'bwf' ? 'w' : (peakModel === 'voigt' ? 'wL' : 'γ')}: ${formatNumber(peak.gamma)}${constraintLabel('gamma') ? ` <span class="constraint-pill">${constraintLabel('gamma')}</span>` : ''}</div>` : ''}
         ${peak.q != null ? `<div>q: ${formatNumber(peak.q)}${constraintLabel('q') ? ` <span class="constraint-pill">${constraintLabel('q')}</span>` : ''}</div>` : ''}
         <div>FWHM: ${formatNumber(metrics.fwhm)}</div>
         <div>面積: ${formatNumber(metrics.area)}</div>
@@ -700,7 +749,7 @@ function renderFitInfo(result) {
   }).join('');
   els.fitInfo.innerHTML = `
     <div><strong>${escapeHtml(result.fileName)}</strong></div>
-    <div>モデル: ${escapeHtml(labelForModel(result.model))}</div>
+    <div>モデル: ${escapeHtml(labelForModel(result.model))}${result.peakModels?.length ? ` (${escapeHtml(result.peakModels.map((peakModel) => labelForModel(peakModel)).join(' / '))})` : ''}</div>
     <div>ピーク数: ${result.peakCount}</div>
     <div class="peak-results">${peaksHtml}</div>
     <div>合計FWHM: ${formatNumber(result.metrics.fwhm)}</div>
@@ -889,7 +938,7 @@ function getPlotRect() {
 function xToPx(x, bounds, plot) { return plot.left + ((x - bounds.xMin) / (bounds.xMax - bounds.xMin || 1)) * plot.width; }
 function pxToX(px, bounds, plot) { return bounds.xMin + ((px - plot.left) / (plot.width || 1)) * (bounds.xMax - bounds.xMin); }
 function yToPx(y, bounds, plot) { return plot.bottom - ((y - bounds.yMin) / (bounds.yMax - bounds.yMin || 1)) * plot.height; }
-function labelForModel(model) { return { gaussian: 'Gaussian', lorentzian: 'Lorentzian', voigt: 'Voigt', bwf: 'BWF' }[model] || model; }
+function labelForModel(model) { return { gaussian: 'Gaussian', lorentzian: 'Lorentzian', voigt: 'Voigt', bwf: 'BWF', mixed: 'Mixed' }[model] || model; }
 function formatNumber(v) {
   if (!Number.isFinite(Number(v))) return '—';
   const n = Number(v);

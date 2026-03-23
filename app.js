@@ -5,6 +5,7 @@ const state = {
   currentFit: null,
   batchResults: [],
   drag: null,
+  trialFit: null,
 };
 
 const els = {};
@@ -14,6 +15,7 @@ window.addEventListener('DOMContentLoaded', () => {
   bindEvents();
   registerServiceWorker();
   renderPeakInputs();
+  renderTrialStatus();
   syncBackgroundDelimiterAvailability();
   resizeCanvas();
   draw();
@@ -32,6 +34,9 @@ function bindElements() {
   els.peakInputs = document.getElementById('peakInputs');
   els.autoInitBtn = document.getElementById('autoInitBtn');
   els.fitCurrentBtn = document.getElementById('fitCurrentBtn');
+  els.acceptTrialBtn = document.getElementById('acceptTrialBtn');
+  els.restoreTrialBtn = document.getElementById('restoreTrialBtn');
+  els.trialStatus = document.getElementById('trialStatus');
   els.sequentialFit = document.getElementById('sequentialFit');
   els.fitAllBtn = document.getElementById('fitAllBtn');
   els.subtractAllBtn = document.getElementById('subtractAllBtn');
@@ -50,26 +55,34 @@ function bindEvents() {
   els.datasetSelect.addEventListener('change', () => {
     state.activeIndex = Number(els.datasetSelect.value) || 0;
     state.currentFit = null;
+    state.trialFit = null;
     if (!state.selection && currentDataset()) state.selection = PeakFitCore.defaultSelection(currentDataset().data);
     syncInitialInputsForActiveDataset();
+    renderTrialStatus();
     renderResultsTable();
     draw();
   });
   els.model.addEventListener('change', () => {
+    state.trialFit = null;
     renderPeakInputs();
     syncInitialInputsForActiveDataset();
+    renderTrialStatus();
     draw();
   });
   els.peakCount.addEventListener('change', () => {
     els.peakCount.value = String(PeakFitCore.normalizePeakCount(els.peakCount.value));
+    state.trialFit = null;
     renderPeakInputs();
     syncInitialInputsForActiveDataset();
+    renderTrialStatus();
     draw();
   });
   els.bgZipExtension.addEventListener('change', syncBackgroundDelimiterAvailability);
-  els.sequentialFit?.addEventListener('change', () => syncInitialInputsForActiveDataset());
-  els.autoInitBtn.addEventListener('click', () => syncInitialInputsFromSelectionEstimate(true));
+  els.sequentialFit?.addEventListener('change', () => { state.trialFit = null; syncInitialInputsForActiveDataset(); renderTrialStatus(); });
+  els.autoInitBtn.addEventListener('click', () => { state.trialFit = null; syncInitialInputsFromSelectionEstimate(true); renderTrialStatus(); });
   els.fitCurrentBtn.addEventListener('click', () => runCurrentFit());
+  els.acceptTrialBtn?.addEventListener('click', () => acceptCurrentTrial());
+  els.restoreTrialBtn?.addEventListener('click', () => restoreTrialSetup());
   els.fitAllBtn.addEventListener('click', () => runBatchFit());
   els.subtractAllBtn.addEventListener('click', () => exportBackgroundSubtractedZip());
   els.exportCsvBtn.addEventListener('click', exportCsv);
@@ -143,6 +156,7 @@ function finalizeDrag() {
   if (Math.abs(x2 - x1) > 1e-9) {
     state.selection = { xMin: x1, xMax: x2 };
     state.currentFit = null;
+    state.trialFit = null;
     syncInitialInputsFromSelectionEstimate();
   }
   draw();
@@ -163,9 +177,11 @@ async function onFilesSelected(event) {
   state.selection = PeakFitCore.defaultSelection(loaded[0].data);
   state.currentFit = null;
   state.batchResults = [];
+  state.trialFit = null;
   refreshDatasetSelect();
   syncInitialInputsForActiveDataset();
   renderFitInfo(null);
+  renderTrialStatus();
   renderResultsTable();
   draw();
   toast(`${loaded.length}件のファイルを読み込みました。`);
@@ -304,22 +320,121 @@ function syncInitialInputsFromSelectionEstimate(forceToast = false) {
   }
 }
 
+function captureCurrentSetup() {
+  return {
+    model: els.model.value,
+    peakCount: PeakFitCore.normalizePeakCount(els.peakCount.value),
+    subtractBackground: Boolean(els.subtractBg.checked),
+    edgeFraction: Number(els.bgEdgeFraction.value),
+    selection: state.selection ? { ...state.selection } : null,
+    initialPeaks: collectInitialPeaks().map((peak) => ({ ...peak })),
+    parameterConstraints: collectParameterConstraints(),
+  };
+}
+
+function applySetupSnapshot(snapshot) {
+  if (!snapshot) return;
+  els.model.value = snapshot.model;
+  els.peakCount.value = String(PeakFitCore.normalizePeakCount(snapshot.peakCount));
+  els.subtractBg.checked = Boolean(snapshot.subtractBackground);
+  els.bgEdgeFraction.value = String(snapshot.edgeFraction);
+  state.selection = snapshot.selection ? { ...snapshot.selection } : state.selection;
+  renderPeakInputs();
+  applyPeaksToInputs(snapshot.initialPeaks || []);
+  applyConstraintsToInputs(snapshot.parameterConstraints);
+}
+
+function renderTrialStatus() {
+  if (!els.trialStatus) return;
+  const ds = currentDataset();
+  const trial = state.trialFit;
+  if (!ds || !trial || trial.fileName !== ds.name) {
+    els.trialStatus.innerHTML = '<div class="muted">試しフィット待ちです。初期条件を決めたら「試しフィット」を押してください。</div>';
+    if (els.acceptTrialBtn) els.acceptTrialBtn.disabled = true;
+    if (els.restoreTrialBtn) els.restoreTrialBtn.disabled = true;
+    return;
+  }
+  const metric = trial.result?.metrics || {};
+  const nextLabel = state.activeIndex < state.datasets.length - 1 ? '採用して次へ' : '採用して終了';
+  els.trialStatus.innerHTML = `
+    <div><strong>試しフィット済み:</strong> ${escapeHtml(trial.fileName)}</div>
+    <div>R²: ${formatNumber(metric.r2)} / RMSE: ${formatNumber(metric.rmse)}</div>
+    <div class="hint">結果が良ければ「${nextLabel}」、悪ければ「初期条件に戻す」で再調整できます。</div>
+  `;
+  if (els.acceptTrialBtn) {
+    els.acceptTrialBtn.disabled = false;
+    els.acceptTrialBtn.textContent = nextLabel;
+  }
+  if (els.restoreTrialBtn) els.restoreTrialBtn.disabled = false;
+}
+
 function runCurrentFit() {
   try {
     const ds = currentDataset();
     ensureReady(ds);
+    const setupSnapshot = captureCurrentSetup();
     const result = PeakFitCore.fitMultiPeak(ds.data, buildFitOptions());
     state.currentFit = { ...result, fileName: ds.name };
+    state.trialFit = { fileName: ds.name, setupSnapshot, result: state.currentFit };
     applyPeaksToInputs(state.currentFit.peaks);
     applyConstraintsToInputs(state.currentFit.parameterConstraints);
-    upsertBatchResult(state.currentFit);
     renderFitInfo(state.currentFit);
+    renderTrialStatus();
     renderResultsTable();
     draw();
-    toast('現在のファイルのフィットが完了しました。');
+    toast('試しフィットが完了しました。良ければ採用、悪ければ初期条件に戻せます。');
   } catch (err) {
     toast(err.message || 'フィットに失敗しました。', true);
   }
+}
+
+function acceptCurrentTrial() {
+  const ds = currentDataset();
+  const trial = state.trialFit;
+  if (!ds || !trial || trial.fileName !== ds.name || !trial.result) return toast('先に試しフィットを実行してください。', true);
+  upsertBatchResult(trial.result);
+  state.currentFit = trial.result;
+  const acceptedPeaks = trial.result.peaks.map((peak) => ({ ...peak }));
+  const acceptedConstraints = trial.result.parameterConstraints;
+  const acceptedSelection = trial.setupSnapshot?.selection ? { ...trial.setupSnapshot.selection } : (state.selection ? { ...state.selection } : null);
+  const hasNext = state.activeIndex < state.datasets.length - 1;
+  state.trialFit = null;
+  if (hasNext) {
+    state.activeIndex += 1;
+    els.datasetSelect.value = String(state.activeIndex);
+    state.currentFit = null;
+    state.selection = acceptedSelection;
+    renderPeakInputs();
+    applyPeaksToInputs(acceptedPeaks);
+    applyConstraintsToInputs(acceptedConstraints);
+    renderFitInfo(null);
+    renderTrialStatus();
+    renderResultsTable();
+    draw();
+    toast('現在の結果を採用し、次のファイルへ進みました。必要なら初期条件を調整して再度試しフィットしてください。');
+    return;
+  }
+  applyPeaksToInputs(acceptedPeaks);
+  applyConstraintsToInputs(acceptedConstraints);
+  renderFitInfo(state.currentFit);
+  renderTrialStatus();
+  renderResultsTable();
+  draw();
+  toast('結果を採用しました。必要ならCSVを書き出して完了してください。');
+}
+
+function restoreTrialSetup() {
+  const ds = currentDataset();
+  const trial = state.trialFit;
+  if (!ds || !trial || trial.fileName !== ds.name) return toast('戻すための試しフィット履歴がありません。', true);
+  applySetupSnapshot(trial.setupSnapshot);
+  state.currentFit = null;
+  state.trialFit = null;
+  renderFitInfo(null);
+  renderTrialStatus();
+  renderResultsTable();
+  draw();
+  toast('フィット前の初期条件に戻しました。数値を調整して再度試しフィットしてください。');
 }
 
 async function runBatchFit() {
@@ -340,7 +455,9 @@ async function runBatchFit() {
     }
     state.batchResults = results;
     state.currentFit = results.find((r) => r.fileName === currentDataset()?.name) || results[0] || null;
+    state.trialFit = null;
     renderFitInfo(state.currentFit);
+    renderTrialStatus();
     renderResultsTable();
     draw();
     if (state.currentFit?.peaks?.length) {
@@ -399,6 +516,7 @@ async function exportBackgroundSubtractedZip() {
       yCorrected: preview.correctedY,
     };
     renderFitInfo(state.currentFit);
+    renderTrialStatus();
     draw();
     toast(`${state.datasets.length}件の背景差し引き結果をZIPで出力しました。`);
   } catch (err) {
@@ -418,9 +536,11 @@ function clearAll() {
   state.selection = null;
   state.currentFit = null;
   state.batchResults = [];
+  state.trialFit = null;
   els.fileInput.value = '';
   refreshDatasetSelect();
   renderFitInfo(null);
+  renderTrialStatus();
   renderResultsTable();
   draw();
 }

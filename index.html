@@ -101,8 +101,13 @@
             <span>連続フィット時に直前ファイルの結果を次ファイルの初期値に使う</span>
           </label>
           <div class="hint">オンにすると、1個目の結果を2個目へ、2個目の結果を3個目へという形で初期値を順次引き継げます。</div>
+          <div id="trialStatus" class="stats-box">
+            <div class="muted">試しフィット待ちです。初期条件を決めたら「試しフィット」を押してください。</div>
+          </div>
           <div class="button-row">
-            <button id="fitCurrentBtn" type="button">現在のファイルをフィット</button>
+            <button id="fitCurrentBtn" type="button">試しフィット</button>
+            <button id="acceptTrialBtn" type="button" class="secondary" disabled>採用して終了</button>
+            <button id="restoreTrialBtn" type="button" class="secondary" disabled>初期条件に戻す</button>
             <button id="fitAllBtn" type="button">全ファイルを一括フィット</button>
             <button id="subtractAllBtn" type="button">背景差し引きのみ（ZIP）</button>
             <button id="exportCsvBtn" type="button">CSVを書き出し</button>

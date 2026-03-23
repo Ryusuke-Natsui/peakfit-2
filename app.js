@@ -1,0 +1,569 @@
+const state = {
+  datasets: [],
+  activeIndex: 0,
+  selection: null,
+  currentFit: null,
+  batchResults: [],
+  drag: null,
+};
+
+const els = {};
+
+window.addEventListener('DOMContentLoaded', () => {
+  bindElements();
+  bindEvents();
+  registerServiceWorker();
+  resizeCanvas();
+  draw();
+});
+
+function bindElements() {
+  els.fileInput = document.getElementById('fileInput');
+  els.datasetSelect = document.getElementById('datasetSelect');
+  els.model = document.getElementById('model');
+  els.subtractBg = document.getElementById('subtractBg');
+  els.bgEdgeFraction = document.getElementById('bgEdgeFraction');
+  els.amplitude = document.getElementById('amplitude');
+  els.center = document.getElementById('center');
+  els.sigma = document.getElementById('sigma');
+  els.gamma = document.getElementById('gamma');
+  els.q = document.getElementById('q');
+  els.autoInitBtn = document.getElementById('autoInitBtn');
+  els.fitCurrentBtn = document.getElementById('fitCurrentBtn');
+  els.fitAllBtn = document.getElementById('fitAllBtn');
+  els.exportCsvBtn = document.getElementById('exportCsvBtn');
+  els.clearBtn = document.getElementById('clearBtn');
+  els.selectionText = document.getElementById('selectionText');
+  els.fitInfo = document.getElementById('fitInfo');
+  els.resultsBody = document.getElementById('resultsBody');
+  els.canvas = document.getElementById('plotCanvas');
+  els.ctx = els.canvas.getContext('2d');
+  els.toast = document.getElementById('toast');
+}
+
+function bindEvents() {
+  els.fileInput.addEventListener('change', onFilesSelected);
+  els.datasetSelect.addEventListener('change', () => {
+    state.activeIndex = Number(els.datasetSelect.value) || 0;
+    state.currentFit = null;
+    if (!state.selection && currentDataset()) {
+      state.selection = PeakFitCore.defaultSelection(currentDataset().data);
+    }
+    syncInitialInputsFromSelectionEstimate();
+    renderResultsTable();
+    draw();
+  });
+
+  els.model.addEventListener('change', () => {
+    syncModelFieldVisibility();
+    syncInitialInputsFromSelectionEstimate();
+    draw();
+  });
+
+  els.autoInitBtn.addEventListener('click', () => {
+    syncInitialInputsFromSelectionEstimate(true);
+  });
+
+  els.fitCurrentBtn.addEventListener('click', () => {
+    try {
+      const ds = currentDataset();
+      ensureReady(ds);
+      const result = PeakFitCore.fitSinglePeak(ds.data, buildFitOptions());
+      state.currentFit = { ...result, fileName: ds.name };
+      upsertBatchResult(state.currentFit);
+      renderFitInfo(state.currentFit);
+      renderResultsTable();
+      draw();
+      toast('現在のファイルのフィットが完了しました。');
+    } catch (err) {
+      toast(err.message || 'フィットに失敗しました。', true);
+    }
+  });
+
+  els.fitAllBtn.addEventListener('click', async () => {
+    try {
+      if (!state.datasets.length) throw new Error('先にファイルを読み込んでください。');
+      if (!state.selection) throw new Error('先にグラフ上でフィット範囲を選択してください。');
+      const baseOptions = buildFitOptions();
+      const results = [];
+      for (const ds of state.datasets) {
+        const result = PeakFitCore.fitSinglePeak(ds.data, baseOptions);
+        results.push({ ...result, fileName: ds.name });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      state.batchResults = results;
+      const active = results.find((r) => r.fileName === currentDataset()?.name);
+      state.currentFit = active || results[0] || null;
+      renderFitInfo(state.currentFit);
+      renderResultsTable();
+      draw();
+      toast(`${results.length}件のファイルを同一初期条件で一括フィットしました。`);
+    } catch (err) {
+      toast(err.message || '一括フィットに失敗しました。', true);
+    }
+  });
+
+  els.exportCsvBtn.addEventListener('click', () => {
+    if (!state.batchResults.length) {
+      toast('先にフィット結果を作成してください。', true);
+      return;
+    }
+    const csv = PeakFitCore.resultsToCSV(state.batchResults);
+    downloadBlob(csv, 'peakfit_results.csv', 'text/csv;charset=utf-8');
+  });
+
+  els.clearBtn.addEventListener('click', () => {
+    state.datasets = [];
+    state.activeIndex = 0;
+    state.selection = null;
+    state.currentFit = null;
+    state.batchResults = [];
+    els.fileInput.value = '';
+    refreshDatasetSelect();
+    renderFitInfo(null);
+    renderResultsTable();
+    draw();
+  });
+
+  window.addEventListener('resize', () => {
+    resizeCanvas();
+    draw();
+  });
+
+  bindCanvasSelection();
+  syncModelFieldVisibility();
+}
+
+function bindCanvasSelection() {
+  const canvas = els.canvas;
+  const startDrag = (clientX) => {
+    const plot = getPlotRect();
+    const x = clientX - canvas.getBoundingClientRect().left;
+    if (!state.datasets.length || !plot) return;
+    if (x < plot.left || x > plot.right) return;
+    state.drag = { startPx: x, currentPx: x };
+    draw();
+  };
+
+  canvas.addEventListener('mousedown', (e) => startDrag(e.clientX));
+  canvas.addEventListener('mousemove', (e) => {
+    if (!state.drag) return;
+    state.drag.currentPx = e.clientX - canvas.getBoundingClientRect().left;
+    draw();
+  });
+  window.addEventListener('mouseup', () => finalizeDrag());
+
+  canvas.addEventListener('touchstart', (e) => {
+    if (e.touches[0]) startDrag(e.touches[0].clientX);
+  }, { passive: true });
+  canvas.addEventListener('touchmove', (e) => {
+    if (!state.drag || !e.touches[0]) return;
+    state.drag.currentPx = e.touches[0].clientX - canvas.getBoundingClientRect().left;
+    draw();
+  }, { passive: true });
+  window.addEventListener('touchend', () => finalizeDrag());
+}
+
+function finalizeDrag() {
+  if (!state.drag || !currentDataset()) return;
+  const { startPx, currentPx } = state.drag;
+  const plot = getPlotRect();
+  const ds = currentDataset();
+  const bounds = dataBounds(ds.data);
+  const p1 = clamp(startPx, plot.left, plot.right);
+  const p2 = clamp(currentPx, plot.left, plot.right);
+  const x1 = pxToX(Math.min(p1, p2), bounds, plot);
+  const x2 = pxToX(Math.max(p1, p2), bounds, plot);
+  state.drag = null;
+  if (Math.abs(x2 - x1) > 1e-9) {
+    state.selection = { xMin: x1, xMax: x2 };
+    state.currentFit = null;
+    syncInitialInputsFromSelectionEstimate();
+  }
+  draw();
+}
+
+async function onFilesSelected(event) {
+  const files = Array.from(event.target.files || []);
+  if (!files.length) return;
+
+  const loaded = [];
+  for (const file of files) {
+    const text = await file.text();
+    const data = PeakFitCore.parseXYText(text);
+    if (data.length < 10) continue;
+    loaded.push({ name: file.name, data });
+  }
+
+  if (!loaded.length) {
+    toast('数値2列のデータを読み込めませんでした。', true);
+    return;
+  }
+
+  state.datasets = loaded;
+  state.activeIndex = 0;
+  state.selection = PeakFitCore.defaultSelection(loaded[0].data);
+  state.currentFit = null;
+  state.batchResults = [];
+  refreshDatasetSelect();
+  syncInitialInputsFromSelectionEstimate();
+  renderFitInfo(null);
+  renderResultsTable();
+  draw();
+  toast(`${loaded.length}件のファイルを読み込みました。`);
+}
+
+function refreshDatasetSelect() {
+  els.datasetSelect.innerHTML = '';
+  state.datasets.forEach((ds, i) => {
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = ds.name;
+    els.datasetSelect.appendChild(opt);
+  });
+  els.datasetSelect.value = String(state.activeIndex);
+}
+
+function currentDataset() {
+  return state.datasets[state.activeIndex] || null;
+}
+
+function ensureReady(ds) {
+  if (!ds) throw new Error('先にファイルを読み込んでください。');
+  if (!state.selection) throw new Error('グラフ上でフィット範囲をドラッグ選択してください。');
+}
+
+function buildFitOptions() {
+  return {
+    xMin: state.selection.xMin,
+    xMax: state.selection.xMax,
+    model: els.model.value,
+    subtractBackground: els.subtractBg.checked,
+    edgeFraction: Number(els.bgEdgeFraction.value),
+    initial: collectInitialParams(),
+  };
+}
+
+function collectInitialParams() {
+  const model = els.model.value;
+  const params = {
+    amplitude: Number(els.amplitude.value),
+    center: Number(els.center.value),
+    sigma: Number(els.sigma.value),
+    gamma: Number(els.gamma.value),
+    q: Number(els.q.value),
+  };
+  const keys = PeakFitCore.modelKeys(model);
+  const out = {};
+  for (const key of keys) out[key] = params[key];
+  return out;
+}
+
+function syncModelFieldVisibility() {
+  const model = els.model.value;
+  document.querySelectorAll('[data-param]').forEach((row) => {
+    const key = row.getAttribute('data-param');
+    row.hidden = !PeakFitCore.modelKeys(model).includes(key);
+  });
+}
+
+function syncInitialInputsFromSelectionEstimate(forceToast = false) {
+  const ds = currentDataset();
+  if (!ds || !state.selection) return;
+  try {
+    const estimated = PeakFitCore.autoInitialParams(ds.data, {
+      xMin: state.selection.xMin,
+      xMax: state.selection.xMax,
+      model: els.model.value,
+      subtractBackground: els.subtractBg.checked,
+      edgeFraction: Number(els.bgEdgeFraction.value),
+    });
+    if (estimated.amplitude != null) els.amplitude.value = formatNumber(estimated.amplitude);
+    if (estimated.center != null) els.center.value = formatNumber(estimated.center);
+    if (estimated.sigma != null) els.sigma.value = formatNumber(estimated.sigma);
+    if (estimated.gamma != null) els.gamma.value = formatNumber(estimated.gamma);
+    if (estimated.q != null && Number.isFinite(estimated.q)) els.q.value = formatNumber(estimated.q);
+    if (forceToast) toast('選択範囲から初期値を再推定しました。');
+  } catch (err) {
+    if (forceToast) toast(err.message || '初期値推定に失敗しました。', true);
+  }
+}
+
+function renderFitInfo(result) {
+  if (!result) {
+    els.fitInfo.innerHTML = '<div class="muted">まだフィットしていません。</div>';
+    return;
+  }
+  const p = result.params;
+  const m = result.metrics;
+  const bg = result.background;
+  els.fitInfo.innerHTML = `
+    <div><strong>${escapeHtml(result.fileName)}</strong></div>
+    <div>モデル: ${escapeHtml(labelForModel(result.model))}</div>
+    <div>中心: ${formatNumber(p.center)}</div>
+    <div>振幅: ${formatNumber(p.amplitude)}</div>
+    ${p.sigma != null ? `<div>σ: ${formatNumber(p.sigma)}</div>` : ''}
+    ${p.gamma != null ? `<div>γ: ${formatNumber(p.gamma)}</div>` : ''}
+    ${p.q != null ? `<div>q: ${formatNumber(p.q)}</div>` : ''}
+    <div>FWHM: ${formatNumber(m.fwhm)}</div>
+    <div>面積: ${formatNumber(m.area)}</div>
+    <div>RMSE: ${formatNumber(m.rmse)}</div>
+    <div>R²: ${formatNumber(m.r2)}</div>
+    <div>背景傾き: ${formatNumber(bg.slope)}</div>
+    <div>背景切片: ${formatNumber(bg.intercept)}</div>
+  `;
+}
+
+function upsertBatchResult(result) {
+  const idx = state.batchResults.findIndex((r) => r.fileName === result.fileName);
+  if (idx >= 0) state.batchResults[idx] = result;
+  else state.batchResults.push(result);
+}
+
+function renderResultsTable() {
+  const rows = state.batchResults;
+  els.resultsBody.innerHTML = '';
+  if (!rows.length) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="8" class="muted">結果はまだありません。</td>';
+    els.resultsBody.appendChild(tr);
+    return;
+  }
+
+  rows.forEach((row) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(row.fileName)}</td>
+      <td>${escapeHtml(labelForModel(row.model))}</td>
+      <td>${formatNumber(row.params.center)}</td>
+      <td>${formatNumber(row.metrics.fwhm)}</td>
+      <td>${formatNumber(row.metrics.area)}</td>
+      <td>${formatNumber(row.metrics.rmse)}</td>
+      <td>${formatNumber(row.metrics.r2)}</td>
+      <td>${formatNumber(row.background.slope)}</td>
+    `;
+    tr.addEventListener('click', () => {
+      const idx = state.datasets.findIndex((ds) => ds.name === row.fileName);
+      if (idx >= 0) {
+        state.activeIndex = idx;
+        els.datasetSelect.value = String(idx);
+      }
+      state.currentFit = row;
+      renderFitInfo(row);
+      draw();
+    });
+    els.resultsBody.appendChild(tr);
+  });
+}
+
+function draw() {
+  const ctx = els.ctx;
+  if (!ctx) return;
+  const dpr = window.devicePixelRatio || 1;
+  ctx.save();
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, els.canvas.width / dpr, els.canvas.height / dpr);
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(0, 0, els.canvas.width / dpr, els.canvas.height / dpr);
+
+  const ds = currentDataset();
+  if (!ds) {
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = '16px system-ui, sans-serif';
+    ctx.fillText('TXTファイルを読み込むとここにグラフが表示されます。', 24, 40);
+    ctx.restore();
+    els.selectionText.textContent = '未選択';
+    return;
+  }
+
+  const plot = getPlotRect();
+  const bounds = dataBounds(ds.data, state.currentFit);
+  drawAxes(ctx, plot, bounds);
+  drawSeries(ctx, plot, bounds, ds.data.map((p) => p.x), ds.data.map((p) => p.y), '#60a5fa', 1.2);
+
+  if (state.selection) {
+    drawSelection(ctx, plot, bounds, state.selection, 'rgba(251, 191, 36, 0.16)', '#fbbf24');
+    els.selectionText.textContent = `${formatNumber(state.selection.xMin)} – ${formatNumber(state.selection.xMax)}`;
+  } else {
+    els.selectionText.textContent = '未選択';
+  }
+
+  if (state.drag) {
+    const x1 = Math.min(state.drag.startPx, state.drag.currentPx);
+    const x2 = Math.max(state.drag.startPx, state.drag.currentPx);
+    ctx.fillStyle = 'rgba(56, 189, 248, 0.16)';
+    ctx.fillRect(x1, plot.top, x2 - x1, plot.bottom - plot.top);
+  }
+
+  if (state.currentFit && state.currentFit.fileName === ds.name) {
+    drawSeries(ctx, plot, bounds, state.currentFit.x, state.currentFit.yBackground, '#94a3b8', 1);
+    drawSeries(ctx, plot, bounds, state.currentFit.x, state.currentFit.yFitAbs, '#f43f5e', 2.1);
+  }
+
+  ctx.restore();
+}
+
+function drawAxes(ctx, plot, bounds) {
+  ctx.strokeStyle = '#334155';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(plot.left, plot.bottom);
+  ctx.lineTo(plot.right, plot.bottom);
+  ctx.lineTo(plot.right, plot.top);
+  ctx.stroke();
+
+  ctx.fillStyle = '#cbd5e1';
+  ctx.font = '12px system-ui, sans-serif';
+
+  const ticks = 6;
+  for (let i = 0; i <= ticks; i++) {
+    const tx = plot.left + (plot.width * i) / ticks;
+    const xVal = bounds.xMin + ((bounds.xMax - bounds.xMin) * i) / ticks;
+    ctx.strokeStyle = '#1e293b';
+    ctx.beginPath();
+    ctx.moveTo(tx, plot.top);
+    ctx.lineTo(tx, plot.bottom);
+    ctx.stroke();
+    ctx.fillText(formatNumber(xVal), tx - 14, plot.bottom + 18);
+  }
+
+  for (let i = 0; i <= ticks; i++) {
+    const ty = plot.bottom - (plot.height * i) / ticks;
+    const yVal = bounds.yMin + ((bounds.yMax - bounds.yMin) * i) / ticks;
+    ctx.strokeStyle = '#1e293b';
+    ctx.beginPath();
+    ctx.moveTo(plot.left, ty);
+    ctx.lineTo(plot.right, ty);
+    ctx.stroke();
+    ctx.fillText(formatNumber(yVal), 8, ty + 4);
+  }
+}
+
+function drawSeries(ctx, plot, bounds, xs, ys, color, width) {
+  if (!xs.length) return;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  xs.forEach((x, i) => {
+    const px = xToPx(x, bounds, plot);
+    const py = yToPx(ys[i], bounds, plot);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  });
+  ctx.stroke();
+}
+
+function drawSelection(ctx, plot, bounds, selection, fill, stroke) {
+  const x1 = xToPx(Math.min(selection.xMin, selection.xMax), bounds, plot);
+  const x2 = xToPx(Math.max(selection.xMin, selection.xMax), bounds, plot);
+  ctx.fillStyle = fill;
+  ctx.fillRect(x1, plot.top, x2 - x1, plot.height);
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = 1.2;
+  ctx.strokeRect(x1, plot.top, x2 - x1, plot.height);
+}
+
+function dataBounds(data, fit = null) {
+  const xs = data.map((p) => p.x);
+  const ys = data.map((p) => p.y);
+  let yMin = Math.min(...ys);
+  let yMax = Math.max(...ys);
+  if (fit) {
+    yMin = Math.min(yMin, ...fit.yFitAbs, ...fit.yBackground);
+    yMax = Math.max(yMax, ...fit.yFitAbs, ...fit.yBackground);
+  }
+  const pad = Math.max((yMax - yMin) * 0.08, 1);
+  return {
+    xMin: Math.min(...xs),
+    xMax: Math.max(...xs),
+    yMin: yMin - pad,
+    yMax: yMax + pad,
+  };
+}
+
+function resizeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = els.canvas.getBoundingClientRect();
+  els.canvas.width = Math.round(rect.width * dpr);
+  els.canvas.height = Math.round(rect.height * dpr);
+}
+
+function getPlotRect() {
+  const w = els.canvas.clientWidth;
+  const h = els.canvas.clientHeight;
+  return {
+    left: 56,
+    right: w - 18,
+    top: 18,
+    bottom: h - 34,
+    width: w - 74,
+    height: h - 52,
+  };
+}
+
+function xToPx(x, bounds, plot) {
+  return plot.left + ((x - bounds.xMin) / (bounds.xMax - bounds.xMin || 1)) * plot.width;
+}
+
+function pxToX(px, bounds, plot) {
+  return bounds.xMin + ((px - plot.left) / (plot.width || 1)) * (bounds.xMax - bounds.xMin);
+}
+
+function yToPx(y, bounds, plot) {
+  return plot.bottom - ((y - bounds.yMin) / (bounds.yMax - bounds.yMin || 1)) * plot.height;
+}
+
+function labelForModel(model) {
+  return {
+    gaussian: 'Gaussian',
+    lorentzian: 'Lorentzian',
+    voigt: 'Voigt (pseudo-Voigt)',
+    bwf: 'BWF',
+  }[model] || model;
+}
+
+function formatNumber(v) {
+  if (!Number.isFinite(Number(v))) return '—';
+  const n = Number(v);
+  if (Math.abs(n) >= 1000 || (Math.abs(n) > 0 && Math.abs(n) < 1e-3)) return n.toExponential(3);
+  return n.toFixed(4).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function clamp(v, min, max) {
+  return Math.min(max, Math.max(min, v));
+}
+
+function downloadBlob(text, filename, type) {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function toast(message, isError = false) {
+  els.toast.textContent = message;
+  els.toast.classList.toggle('error', isError);
+  els.toast.classList.add('show');
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => els.toast.classList.remove('show'), 2600);
+}
+
+function registerServiceWorker() {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  }
+}

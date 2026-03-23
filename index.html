@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f172a" />
+    <title>Peak Fitting PWA</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <h1>Peak Fitting PWA</h1>
+        <p>TXT/CSV 2列データを読み込み、範囲選択・背景差し引き・一括ピークフィット</p>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="panel controls">
+        <section>
+          <h2>1. データ</h2>
+          <label class="file-label">
+            <span>ファイルを選択</span>
+            <input id="fileInput" type="file" accept=".txt,.csv,.dat" multiple />
+          </label>
+          <label>
+            <span>表示データ</span>
+            <select id="datasetSelect"></select>
+          </label>
+          <div class="hint">同時に読み込んだ全ファイルに対し、現在の初期値・範囲・モデルで一括フィットできます。</div>
+        </section>
+
+        <section>
+          <h2>2. モデルと背景</h2>
+          <label>
+            <span>モデル</span>
+            <select id="model">
+              <option value="gaussian">Gaussian</option>
+              <option value="lorentzian">Lorentzian</option>
+              <option value="voigt">Voigt (pseudo-Voigt)</option>
+              <option value="bwf">BWF</option>
+            </select>
+          </label>
+          <label class="inline-check">
+            <input id="subtractBg" type="checkbox" checked />
+            <span>選択範囲の端部から線形背景を推定して差し引く</span>
+          </label>
+          <label>
+            <span>背景に使う両端割合</span>
+            <input id="bgEdgeFraction" type="number" min="0.05" max="0.45" step="0.01" value="0.15" />
+          </label>
+          <div class="hint">例: 0.15 は選択範囲の左右それぞれ15%の点群で線形背景を推定します。</div>
+        </section>
+
+        <section>
+          <h2>3. 初期値</h2>
+          <div class="grid2">
+            <label data-param="amplitude">
+              <span>Amplitude</span>
+              <input id="amplitude" type="number" step="any" />
+            </label>
+            <label data-param="center">
+              <span>Center</span>
+              <input id="center" type="number" step="any" />
+            </label>
+            <label data-param="sigma">
+              <span>σ</span>
+              <input id="sigma" type="number" step="any" />
+            </label>
+            <label data-param="gamma">
+              <span>γ</span>
+              <input id="gamma" type="number" step="any" />
+            </label>
+            <label data-param="q">
+              <span>q</span>
+              <input id="q" type="number" step="any" value="-5" />
+            </label>
+          </div>
+          <button id="autoInitBtn" type="button">選択範囲から初期値を再推定</button>
+        </section>
+
+        <section>
+          <h2>4. 実行</h2>
+          <div class="selection-box">
+            <div>フィット範囲</div>
+            <strong id="selectionText">未選択</strong>
+            <div class="hint">グラフ上を横方向にドラッグして範囲指定</div>
+          </div>
+          <div class="button-row">
+            <button id="fitCurrentBtn" type="button">現在のファイルをフィット</button>
+            <button id="fitAllBtn" type="button">全ファイルを一括フィット</button>
+            <button id="exportCsvBtn" type="button">CSVを書き出し</button>
+            <button id="clearBtn" type="button" class="secondary">クリア</button>
+          </div>
+        </section>
+      </aside>
+
+      <section class="panel plot-panel">
+        <div class="plot-header">
+          <div>
+            <h2>グラフ</h2>
+            <p>青: 生データ / 灰: 線形背景 / 赤: フィット結果</p>
+          </div>
+        </div>
+        <canvas id="plotCanvas"></canvas>
+      </section>
+
+      <aside class="panel results-panel">
+        <section>
+          <h2>現在の結果</h2>
+          <div id="fitInfo" class="stats-box">
+            <div class="muted">まだフィットしていません。</div>
+          </div>
+        </section>
+
+        <section>
+          <h2>一括結果</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Model</th>
+                  <th>Center</th>
+                  <th>FWHM</th>
+                  <th>Area</th>
+                  <th>RMSE</th>
+                  <th>R²</th>
+                  <th>BG slope</th>
+                </tr>
+              </thead>
+              <tbody id="resultsBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </aside>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="./core.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

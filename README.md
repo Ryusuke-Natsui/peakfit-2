@@ -7,7 +7,7 @@
 - TXT / CSV / DAT の 2 列数値データ読み込み
 - グラフ上ドラッグによるフィット範囲選択
 - 線形背景の推定と差し引き
-- Gaussian / Lorentzian / Voigt (pseudo-Voigt) / BWF
+- Gaussian / Lorentzian / Voigt / BWF
 - 同一モデルの複数ピーク和フィット（1〜6ピーク）
 - 複数ファイルに対する同一初期条件での一括フィット
 - 複数ファイルの線形背景差し引き結果を ZIP で一括出力（ZIP内ファイルの拡張子・列構成・テキスト区切り文字を選択可能）
@@ -44,7 +44,8 @@ npx serve .
 
 ## 実装メモ
 
-- Voigt は厳密畳み込みではなく pseudo-Voigt 近似です。
+- Voigt は Gaussian FWHM (wG) と Lorentzian FWHM (wL) の厳密畳み込みとして実装しています。
+- Voigt のパラメータは `A`（面積）, `xc`（中心）, `wG`, `wL` です。
 - フィットは同一モデルの 1〜6 ピーク和を想定しています。
 - 最適化はブラウザ内の Nelder–Mead 法で行っています。
 - 背景は「選択範囲の左右端部の点群」から線形回帰で推定します。

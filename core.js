@@ -428,6 +428,80 @@
     return s;
   }
 
+
+  function backgroundSubtractedToCSV(data, options) {
+    const { xMin, xMax, edgeFraction = 0.15 } = options;
+    const points = selectRange(data, xMin, xMax);
+    if (points.length < 4) throw new Error('背景差し引き範囲の点数が少なすぎます。');
+    const background = estimateLinearBackground(points, edgeFraction);
+    const lines = ['x,y_raw,y_background,y_corrected'];
+    points.forEach((point, index) => {
+      lines.push([point.x, point.y, background.bgY[index], background.correctedY[index]].join(','));
+    });
+    return lines.join('\n');
+  }
+
+  function crc32(bytes) {
+    let crc = -1;
+    for (let i = 0; i < bytes.length; i++) {
+      crc ^= bytes[i];
+      for (let j = 0; j < 8; j++) {
+        crc = (crc >>> 1) ^ (0xEDB88320 & -(crc & 1));
+      }
+    }
+    return (crc ^ -1) >>> 0;
+  }
+
+  function createZipFromTextFiles(files) {
+    const encoder = new TextEncoder();
+    const localParts = [];
+    const centralParts = [];
+    let offset = 0;
+    for (const file of files) {
+      const nameBytes = encoder.encode(file.name);
+      const dataBytes = encoder.encode(file.content);
+      const crc = crc32(dataBytes);
+      const localHeader = new Uint8Array(30 + nameBytes.length);
+      const lv = new DataView(localHeader.buffer);
+      lv.setUint32(0, 0x04034b50, true);
+      lv.setUint16(4, 20, true);
+      lv.setUint16(8, 0, true);
+      lv.setUint16(10, 0, true);
+      lv.setUint32(14, crc, true);
+      lv.setUint32(18, dataBytes.length, true);
+      lv.setUint32(22, dataBytes.length, true);
+      lv.setUint16(26, nameBytes.length, true);
+      localHeader.set(nameBytes, 30);
+      localParts.push(localHeader, dataBytes);
+
+      const centralHeader = new Uint8Array(46 + nameBytes.length);
+      const cv = new DataView(centralHeader.buffer);
+      cv.setUint32(0, 0x02014b50, true);
+      cv.setUint16(4, 20, true);
+      cv.setUint16(6, 20, true);
+      cv.setUint16(10, 0, true);
+      cv.setUint16(12, 0, true);
+      cv.setUint32(16, crc, true);
+      cv.setUint32(20, dataBytes.length, true);
+      cv.setUint32(24, dataBytes.length, true);
+      cv.setUint16(28, nameBytes.length, true);
+      cv.setUint32(42, offset, true);
+      centralHeader.set(nameBytes, 46);
+      centralParts.push(centralHeader);
+
+      offset += localHeader.length + dataBytes.length;
+    }
+    const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0);
+    const end = new Uint8Array(22);
+    const ev = new DataView(end.buffer);
+    ev.setUint32(0, 0x06054b50, true);
+    ev.setUint16(8, files.length, true);
+    ev.setUint16(10, files.length, true);
+    ev.setUint32(12, centralSize, true);
+    ev.setUint32(16, offset, true);
+    return new Blob([...localParts, ...centralParts, end], { type: 'application/zip' });
+  }
+
   function resultsToCSV(results) {
     const maxPeaks = results.reduce((max, row) => Math.max(max, row.peakCount || row.peaks?.length || 1), 1);
     const header = ['file', 'model', 'peak_count', 'x_min', 'x_max'];
@@ -469,6 +543,8 @@
     fitSinglePeak,
     fitMultiPeak,
     resultsToCSV,
+    backgroundSubtractedToCSV,
+    createZipFromTextFiles,
     defaultSelection,
     modelKeys,
     modelY,

@@ -327,3 +327,13 @@ button.secondary {
   background: rgba(14, 165, 233, 0.12);
   font-size: 0.78rem;
 }
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  filter: none;
+}
+
+button.secondary:disabled {
+  border-color: #334155;
+}

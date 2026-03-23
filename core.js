@@ -93,27 +93,24 @@
     return amplitude * (gamma * gamma) / (((x - center) ** 2) + (gamma * gamma));
   }
 
-  function pseudoVoigt(x, p) {
-    const { amplitude, center, sigma, gamma } = p;
-    const fG = GAUSS_FWHM * sigma;
-    const fL = 2 * gamma;
-    const f = Math.pow(
-      Math.pow(fG, 5) +
-        2.69269 * Math.pow(fG, 4) * fL +
-        2.42843 * Math.pow(fG, 3) * Math.pow(fL, 2) +
-        4.47163 * Math.pow(fG, 2) * Math.pow(fL, 3) +
-        0.07842 * fG * Math.pow(fL, 4) +
-        Math.pow(fL, 5),
-      1 / 5
-    );
-    const ratio = f === 0 ? 0 : fL / f;
-    const eta = clamp(1.36603 * ratio - 0.47719 * ratio * ratio + 0.11116 * ratio * ratio * ratio, 0, 1);
-    const sigmaEff = Math.max(f / GAUSS_FWHM, 1e-9);
-    const gammaEff = Math.max(f / 2, 1e-9);
-    return amplitude * (
-      eta * lorentzian(x, { amplitude: 1, center, gamma: gammaEff }) +
-      (1 - eta) * gaussian(x, { amplitude: 1, center, sigma: sigmaEff })
-    );
+  function voigt(x, p) {
+    const { amplitude: area, center, sigma: wG, gamma: wL } = p;
+    const safeWG = Math.max(wG, 1e-9);
+    const safeWL = Math.max(wL, 1e-9);
+    const sqrtLn2 = Math.sqrt(Math.log(2));
+    const a = sqrtLn2 * safeWL / safeWG;
+    const b = (2 * sqrtLn2 * (x - center)) / safeWG;
+    const limit = 8;
+    const steps = 80;
+    const h = (2 * limit) / steps;
+    let integral = 0;
+    for (let i = 0; i <= steps; i++) {
+      const t = -limit + i * h;
+      const weight = i === 0 || i === steps ? 1 : (i % 2 === 0 ? 2 : 4);
+      integral += weight * Math.exp(-(t * t)) / ((a * a) + ((b - t) * (b - t)));
+    }
+    integral *= h / 3;
+    return (area * 2 * Math.log(2) * safeWL * integral) / (Math.pow(Math.PI, 1.5) * safeWG * safeWG);
   }
 
   function bwf(x, p) {
@@ -127,7 +124,7 @@
     switch (model) {
       case 'gaussian': return gaussian(x, params);
       case 'lorentzian': return lorentzian(x, params);
-      case 'voigt': return pseudoVoigt(x, params);
+      case 'voigt': return voigt(x, params);
       case 'bwf': return bwf(x, params);
       default: throw new Error(`Unknown model: ${model}`);
     }
@@ -224,18 +221,20 @@
       const amplitude = Math.max(ys[peakIdx], 1e-3);
       const center = xs[peakIdx];
       const fwhm = halfMaxWidth(xs, ys, peakIdx, amplitude / 2);
+      const area = Math.max(Math.abs(trapz(xs, ys)), 1e-3);
       return {
         amplitude,
         center,
         sigma: Math.max(fwhm / GAUSS_FWHM, 1e-4),
         gamma: Math.max(fwhm / 2, 1e-4),
+        area,
         q: -5,
       };
     });
     return peaks.map((peak) => {
       if (model === 'gaussian') return { amplitude: peak.amplitude, center: peak.center, sigma: peak.sigma };
       if (model === 'lorentzian') return { amplitude: peak.amplitude, center: peak.center, gamma: peak.gamma };
-      if (model === 'voigt') return { amplitude: peak.amplitude, center: peak.center, sigma: peak.sigma, gamma: peak.gamma };
+      if (model === 'voigt') return { amplitude: peak.area, center: peak.center, sigma: Math.max(0.85 * (GAUSS_FWHM * peak.sigma), 1e-4), gamma: Math.max(0.85 * (GAUSS_FWHM * peak.sigma), 1e-4) };
       return { amplitude: peak.amplitude, center: peak.center, gamma: peak.gamma, q: peak.q };
     });
   }

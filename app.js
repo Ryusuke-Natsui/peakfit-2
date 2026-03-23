@@ -76,6 +76,13 @@ function bindEvents() {
   bindCanvasSelection();
 }
 
+function paramLabel(model, key) {
+  if (model === 'voigt') {
+    return { amplitude: 'A (area)', center: 'xc', sigma: 'wG', gamma: 'wL' }[key] || key;
+  }
+  return { amplitude: 'Amplitude', center: 'Center', sigma: 'σ', gamma: 'γ', q: 'q' }[key] || key;
+}
+
 function renderPeakInputs() {
   const peakCount = PeakFitCore.normalizePeakCount(els.peakCount?.value || 1);
   const model = els.model?.value || 'gaussian';
@@ -89,11 +96,11 @@ function renderPeakInputs() {
     card.innerHTML = `
       <div class="peak-card-title">Peak ${i + 1}</div>
       <div class="grid2 peak-grid">
-        ${buildPeakInput('amplitude', 'Amplitude', i, peak.amplitude ?? '')}
-        ${buildPeakInput('center', 'Center', i, peak.center ?? '')}
-        ${keys.includes('sigma') ? buildPeakInput('sigma', 'σ', i, peak.sigma ?? '') : ''}
-        ${keys.includes('gamma') ? buildPeakInput('gamma', 'γ', i, peak.gamma ?? '') : ''}
-        ${keys.includes('q') ? buildPeakInput('q', 'q', i, peak.q ?? -5) : ''}
+        ${buildPeakInput('amplitude', paramLabel(model, 'amplitude'), i, peak.amplitude ?? '')}
+        ${buildPeakInput('center', paramLabel(model, 'center'), i, peak.center ?? '')}
+        ${keys.includes('sigma') ? buildPeakInput('sigma', paramLabel(model, 'sigma'), i, peak.sigma ?? '') : ''}
+        ${keys.includes('gamma') ? buildPeakInput('gamma', paramLabel(model, 'gamma'), i, peak.gamma ?? '') : ''}
+        ${keys.includes('q') ? buildPeakInput('q', paramLabel(model, 'q'), i, peak.q ?? -5) : ''}
       </div>
     `;
     els.peakInputs.appendChild(card);
@@ -368,9 +375,9 @@ function renderFitInfo(result) {
       <div class="peak-result">
         <div><strong>Peak ${index + 1}</strong></div>
         <div>中心: ${formatNumber(peak.center)}</div>
-        <div>振幅: ${formatNumber(peak.amplitude)}</div>
-        ${peak.sigma != null ? `<div>σ: ${formatNumber(peak.sigma)}</div>` : ''}
-        ${peak.gamma != null ? `<div>γ: ${formatNumber(peak.gamma)}</div>` : ''}
+        <div>${result.model === 'voigt' ? 'A (area)' : '振幅'}: ${formatNumber(peak.amplitude)}</div>
+        ${peak.sigma != null ? `<div>${result.model === 'voigt' ? 'wG' : 'σ'}: ${formatNumber(peak.sigma)}</div>` : ''}
+        ${peak.gamma != null ? `<div>${result.model === 'voigt' ? 'wL' : 'γ'}: ${formatNumber(peak.gamma)}</div>` : ''}
         ${peak.q != null ? `<div>q: ${formatNumber(peak.q)}</div>` : ''}
         <div>FWHM: ${formatNumber(metrics.fwhm)}</div>
         <div>面積: ${formatNumber(metrics.area)}</div>
@@ -567,7 +574,7 @@ function getPlotRect() {
 function xToPx(x, bounds, plot) { return plot.left + ((x - bounds.xMin) / (bounds.xMax - bounds.xMin || 1)) * plot.width; }
 function pxToX(px, bounds, plot) { return bounds.xMin + ((px - plot.left) / (plot.width || 1)) * (bounds.xMax - bounds.xMin); }
 function yToPx(y, bounds, plot) { return plot.bottom - ((y - bounds.yMin) / (bounds.yMax - bounds.yMin || 1)) * plot.height; }
-function labelForModel(model) { return { gaussian: 'Gaussian', lorentzian: 'Lorentzian', voigt: 'Voigt (pseudo-Voigt)', bwf: 'BWF' }[model] || model; }
+function labelForModel(model) { return { gaussian: 'Gaussian', lorentzian: 'Lorentzian', voigt: 'Voigt', bwf: 'BWF' }[model] || model; }
 function formatNumber(v) {
   if (!Number.isFinite(Number(v))) return '—';
   const n = Number(v);

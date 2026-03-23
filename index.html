@@ -95,6 +95,11 @@
             <strong id="selectionText">未選択</strong>
             <div class="hint">グラフ上を横方向にドラッグして範囲指定</div>
           </div>
+          <label class="inline-check">
+            <input id="sequentialFit" type="checkbox" />
+            <span>連続フィット時に直前ファイルの結果を次ファイルの初期値に使う</span>
+          </label>
+          <div class="hint">オンにすると、1個目の結果を2個目へ、2個目の結果を3個目へという形で初期値を順次引き継げます。</div>
           <div class="button-row">
             <button id="fitCurrentBtn" type="button">現在のファイルをフィット</button>
             <button id="fitAllBtn" type="button">全ファイルを一括フィット</button>

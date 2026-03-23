@@ -25,6 +25,7 @@ function bindElements() {
   els.peakCount = document.getElementById('peakCount');
   els.subtractBg = document.getElementById('subtractBg');
   els.bgEdgeFraction = document.getElementById('bgEdgeFraction');
+  els.bgZipExtension = document.getElementById('bgZipExtension');
   els.peakInputs = document.getElementById('peakInputs');
   els.autoInitBtn = document.getElementById('autoInitBtn');
   els.fitCurrentBtn = document.getElementById('fitCurrentBtn');
@@ -277,8 +278,9 @@ async function exportBackgroundSubtractedZip() {
     if (!state.datasets.length) throw new Error('先にファイルを読み込んでください。');
     if (!state.selection) throw new Error('先にグラフ上で処理範囲を選択してください。');
     const edgeFraction = Number(els.bgEdgeFraction.value);
+    const outputExtension = normalizeBackgroundZipExtension(els.bgZipExtension.value);
     const files = state.datasets.map((ds) => ({
-      name: buildBackgroundOutputName(ds.name),
+      name: buildBackgroundOutputName(ds.name, outputExtension),
       content: PeakFitCore.backgroundSubtractedToCSV(ds.data, {
         xMin: state.selection.xMin,
         xMax: state.selection.xMax,
@@ -290,6 +292,7 @@ async function exportBackgroundSubtractedZip() {
       `selection_x_min,${state.selection.xMin}`,
       `selection_x_max,${state.selection.xMax}`,
       `edge_fraction,${edgeFraction}`,
+      `file_extension,${outputExtension}`,
       `generated_at,${new Date().toISOString()}`,
     ].join('\n');
     files.unshift({ name: 'README.txt', content: readme });
@@ -588,8 +591,13 @@ function registerServiceWorker() {
 }
 
 
-function buildBackgroundOutputName(fileName) {
+function normalizeBackgroundZipExtension(value) {
+  return ['csv', 'txt', 'dat'].includes(value) ? value : 'csv';
+}
+
+function buildBackgroundOutputName(fileName, extension = 'csv') {
+  const normalizedExtension = normalizeBackgroundZipExtension(extension);
   const dot = fileName.lastIndexOf('.');
-  if (dot <= 0) return `${fileName}_bgsub.csv`;
-  return `${fileName.slice(0, dot)}_bgsub.csv`;
+  if (dot <= 0) return `${fileName}_bgsub.${normalizedExtension}`;
+  return `${fileName.slice(0, dot)}_bgsub.${normalizedExtension}`;
 }

@@ -56,6 +56,15 @@
             <input id="bgEdgeFraction" type="number" min="0.05" max="0.45" step="0.01" value="0.15" />
           </label>
           <div class="hint">例: 0.15 は選択範囲の左右それぞれ15%の点群で線形背景を推定します。</div>
+          <label>
+            <span>背景差し引きZIP内の拡張子</span>
+            <select id="bgZipExtension">
+              <option value="csv">.csv</option>
+              <option value="txt">.txt</option>
+              <option value="dat">.dat</option>
+            </select>
+          </label>
+          <div class="hint">ZIP内の各データファイル名の拡張子を選べます。内容は x, y_raw, y_background, y_corrected の4列です。</div>
         </section>
 
         <section>

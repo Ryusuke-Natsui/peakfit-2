@@ -290,3 +290,40 @@ button.secondary {
     grid-template-columns: 1fr;
   }
 }
+
+.param-field {
+  gap: 8px;
+}
+
+.constraint-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.constraint-check {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.constraint-check input {
+  width: auto;
+  margin: 0;
+  padding: 0;
+}
+
+.constraint-pill {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #bae6fd;
+  background: rgba(14, 165, 233, 0.12);
+  font-size: 0.78rem;
+}

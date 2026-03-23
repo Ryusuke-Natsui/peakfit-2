@@ -12,7 +12,7 @@
     <header class="app-header">
       <div>
         <h1>Peak Fitting PWA</h1>
-        <p>TXT/CSV 2列データを読み込み、範囲選択・背景差し引き・一括ピークフィット</p>
+        <p>TXT/CSV 2列データを読み込み、範囲選択・背景差し引き・複数ピークの一括フィット</p>
       </div>
     </header>
 
@@ -42,6 +42,11 @@
               <option value="bwf">BWF</option>
             </select>
           </label>
+          <label>
+            <span>ピーク数</span>
+            <input id="peakCount" type="number" min="1" max="6" step="1" value="1" />
+          </label>
+          <div class="hint">同一モデルのピーク和として 1〜6 個まで同時フィットできます。</div>
           <label class="inline-check">
             <input id="subtractBg" type="checkbox" checked />
             <span>選択範囲の端部から線形背景を推定して差し引く</span>
@@ -55,28 +60,7 @@
 
         <section>
           <h2>3. 初期値</h2>
-          <div class="grid2">
-            <label data-param="amplitude">
-              <span>Amplitude</span>
-              <input id="amplitude" type="number" step="any" />
-            </label>
-            <label data-param="center">
-              <span>Center</span>
-              <input id="center" type="number" step="any" />
-            </label>
-            <label data-param="sigma">
-              <span>σ</span>
-              <input id="sigma" type="number" step="any" />
-            </label>
-            <label data-param="gamma">
-              <span>γ</span>
-              <input id="gamma" type="number" step="any" />
-            </label>
-            <label data-param="q">
-              <span>q</span>
-              <input id="q" type="number" step="any" value="-5" />
-            </label>
-          </div>
+          <div id="peakInputs" class="peak-inputs"></div>
           <button id="autoInitBtn" type="button">選択範囲から初期値を再推定</button>
         </section>
 
@@ -100,7 +84,7 @@
         <div class="plot-header">
           <div>
             <h2>グラフ</h2>
-            <p>青: 生データ / 灰: 線形背景 / 赤: フィット結果</p>
+            <p>青: 生データ / 灰: 線形背景 / 細線: 各ピーク / 赤: 合成フィット</p>
           </div>
         </div>
         <canvas id="plotCanvas"></canvas>
@@ -122,7 +106,8 @@
                 <tr>
                   <th>File</th>
                   <th>Model</th>
-                  <th>Center</th>
+                  <th>Peaks</th>
+                  <th>Center1</th>
                   <th>FWHM</th>
                   <th>Area</th>
                   <th>RMSE</th>

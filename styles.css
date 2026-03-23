@@ -138,6 +138,35 @@ button.secondary {
   margin-top: 3px;
 }
 
+
+.peak-inputs {
+  display: grid;
+  gap: 12px;
+}
+
+.peak-card,
+.peak-result {
+  background: rgba(2, 6, 23, 0.55);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.peak-card-title {
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.peak-grid {
+  align-items: start;
+}
+
+.peak-results {
+  display: grid;
+  gap: 8px;
+  margin: 6px 0;
+}
+
 .selection-box,
 .stats-box {
   background: rgba(2, 6, 23, 0.6);

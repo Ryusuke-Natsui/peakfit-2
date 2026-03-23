@@ -92,7 +92,7 @@
                   <span>ピーク数</span>
                   <input id="peakCount" type="number" min="1" max="6" step="1" value="1" />
                 </label>
-                <div class="hint">同一モデルのピーク和として 1〜6 個まで同時フィットできます。</div>
+                <div class="hint">1〜6 個まで同時フィットでき、各ピークごとに異なるフィット関数を選べます。</div>
               </div>
               <div class="field-stack">
                 <label class="inline-check">
@@ -111,14 +111,14 @@
           <details class="control-card" open>
             <summary>
               <span>ピーク初期値</span>
-              <span class="summary-meta">複数列入力 / 固定 / 共有ID</span>
+              <span class="summary-meta">関数別入力 / 固定 / 共有ID</span>
             </summary>
             <div class="control-card-body">
               <div id="peakInputs" class="peak-inputs"></div>
               <div class="inline-actions">
                 <button id="autoInitBtn" type="button">選択範囲から初期値を再推定</button>
               </div>
-              <div class="hint">各定数は「固定」で最適化対象から外せます。「共有ID」に同じ文字列を入れると、複数ピークでその定数を共通化します。</div>
+              <div class="hint">各ピークで Fit function を個別に選べます。各定数は「固定」で最適化対象から外せます。「共有ID」に同じ文字列を入れると、同じ種類の定数を複数ピークで共通化します。</div>
             </div>
           </details>
 

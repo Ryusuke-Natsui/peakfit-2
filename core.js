@@ -191,14 +191,20 @@
     return clamp(Math.round(Number(peakCount) || 1), 1, 6);
   }
 
-  function normalizeParameterConstraints(model, peakCount, constraints = {}) {
-    const keys = modelKeys(model);
+  function normalizePeakModels(model, peakCount, peakModels = []) {
     const normalizedCount = normalizePeakCount(peakCount);
+    const fallbackModel = peakModels[0] || model || 'gaussian';
+    return Array.from({ length: normalizedCount }, (_, i) => peakModels[i] || fallbackModel);
+  }
+
+  function normalizeParameterConstraints(model, peakCount, constraints = {}, peakModels = []) {
+    const normalizedCount = normalizePeakCount(peakCount);
+    const normalizedModels = normalizePeakModels(model, peakCount, peakModels);
     const perPeak = [];
     for (let i = 0; i < normalizedCount; i++) {
       const source = constraints.perPeak?.[i] || {};
       const peakConstraint = {};
-      for (const key of keys) {
+      for (const key of modelKeys(normalizedModels[i])) {
         const sharedGroupRaw = source[key]?.sharedGroup ?? '';
         const sharedGroup = String(sharedGroupRaw).trim();
         peakConstraint[key] = {
@@ -211,14 +217,14 @@
     return { perPeak };
   }
 
-  function createConstraintMapping(model, peakCount, constraints = {}) {
-    const keys = modelKeys(model);
-    const normalized = normalizeParameterConstraints(model, peakCount, constraints);
+  function createConstraintMapping(model, peakCount, constraints = {}, peakModels = []) {
+    const normalizedModels = normalizePeakModels(model, peakCount, peakModels);
+    const normalized = normalizeParameterConstraints(model, peakCount, constraints, normalizedModels);
     const sharedOwners = new Map();
     const descriptors = [];
     const descriptorIndexByKey = new Map();
     for (let peakIndex = 0; peakIndex < normalized.perPeak.length; peakIndex++) {
-      for (const key of keys) {
+      for (const key of modelKeys(normalizedModels[peakIndex])) {
         const spec = normalized.perPeak[peakIndex][key];
         const mapKey = `${peakIndex}:${key}`;
         if (spec.fixed) {
@@ -249,13 +255,13 @@
     return constraintMapping.descriptors.map(({ peakIndex, key }) => Number(peaks[peakIndex]?.[key]));
   }
 
-  function optimizationVectorToPeaks(model, basePeaks, vec, constraintMapping, peakCount) {
-    const keys = modelKeys(model);
+  function optimizationVectorToPeaks(model, basePeaks, vec, constraintMapping, peakCount, peakModels = []) {
     const normalizedCount = normalizePeakCount(peakCount);
+    const normalizedModels = normalizePeakModels(model, peakCount, peakModels);
     const peaks = [];
     for (let i = 0; i < normalizedCount; i++) {
       const peak = {};
-      for (const key of keys) {
+      for (const key of modelKeys(normalizedModels[i])) {
         const descriptorIndex = constraintMapping.descriptorIndexByKey.get(`${i}:${key}`);
         peak[key] = descriptorIndex == null ? Number(basePeaks[i]?.[key]) : vec[descriptorIndex];
       }
@@ -308,6 +314,7 @@
 
   function autoInitialPeaks(data, options) {
     const { xMin, xMax, model, subtractBackground, edgeFraction, peakCount = 1 } = options;
+    const normalizedModels = normalizePeakModels(model, peakCount, options.peakModels);
     const points = selectRange(data, xMin, xMax);
     const normalizedCount = normalizePeakCount(peakCount);
     if (points.length < Math.max(5, normalizedCount * 4)) throw new Error('選択範囲内の点数が少なすぎます。');
@@ -334,10 +341,11 @@
         q: estimateBwfQ(xs, ys, center, gaussianWidth, 0),
       };
     });
-    return peaks.map((peak) => {
-      if (model === 'gaussian') return { amplitude: peak.amplitude, center: peak.center, sigma: Math.max(peak.fwhm / GAUSS_FWHM, 1e-4) };
-      if (model === 'lorentzian') return { amplitude: peak.amplitude, center: peak.center, gamma: Math.max(peak.fwhm / 2, 1e-4) };
-      if (model === 'voigt') return { amplitude: peak.area, center: peak.center, sigma: peak.sigma, gamma: peak.gamma };
+    return peaks.map((peak, index) => {
+      const peakModel = normalizedModels[index];
+      if (peakModel === 'gaussian') return { amplitude: peak.amplitude, center: peak.center, sigma: Math.max(peak.fwhm / GAUSS_FWHM, 1e-4) };
+      if (peakModel === 'lorentzian') return { amplitude: peak.amplitude, center: peak.center, gamma: Math.max(peak.fwhm / 2, 1e-4) };
+      if (peakModel === 'voigt') return { amplitude: peak.area, center: peak.center, sigma: peak.sigma, gamma: peak.gamma };
       return { amplitude: peak.amplitude, center: peak.center, gamma: peak.gamma, q: peak.q };
     });
   }
@@ -452,6 +460,7 @@
   function fitMultiPeak(data, options) {
     const { xMin, xMax, model, subtractBackground = true, edgeFraction = 0.15, maxIter = 800 } = options;
     const peakCount = normalizePeakCount(options.peakCount || options.initialPeaks?.length || 1);
+    const peakModels = normalizePeakModels(model, peakCount, options.peakModels);
     const points = selectRange(data, xMin, xMax);
     if (points.length < Math.max(8, peakCount * 5)) throw new Error('選択範囲内のデータ点が少なすぎます。');
     const xs = points.map((p) => p.x);
@@ -463,10 +472,9 @@
     const domain = { xMin: Math.min(xMin, xMax), xMax: Math.max(xMin, xMax), width: Math.max(Math.abs(xMax - xMin), 1e-6) };
     const startPeaks = (options.initialPeaks && options.initialPeaks.length)
       ? options.initialPeaks.slice(0, peakCount)
-      : autoInitialPeaks(data, { xMin, xMax, model, subtractBackground, edgeFraction, peakCount });
-    const keys = modelKeys(model);
-    const normalizedPeaks = startPeaks.map((peak) => Object.fromEntries(keys.map((k) => [k, Number(peak[k])] )));
-    const constraintMapping = createConstraintMapping(model, peakCount, options.parameterConstraints);
+      : autoInitialPeaks(data, { xMin, xMax, model, subtractBackground, edgeFraction, peakCount, peakModels });
+    const normalizedPeaks = startPeaks.map((peak, index) => Object.fromEntries(modelKeys(peakModels[index]).map((k) => [k, Number(peak[k])] )));
+    const constraintMapping = createConstraintMapping(model, peakCount, options.parameterConstraints, peakModels);
     const x0 = buildOptimizationVector(model, normalizedPeaks, constraintMapping);
     const steps = constraintMapping.descriptors.map(({ peakIndex, key }) => {
       const peak = normalizedPeaks[peakIndex] || {};
@@ -477,20 +485,23 @@
       return Math.max(Math.abs(peak.q || 5) * 0.2, 0.25);
     });
     const objective = (vec) => {
-      const peaks = optimizationVectorToPeaks(model, normalizedPeaks, vec, constraintMapping, peakCount);
-      if (!validatePeaks(model, peaks, domain)) return 1e18;
+      const peaks = optimizationVectorToPeaks(model, normalizedPeaks, vec, constraintMapping, peakCount, peakModels);
+      if (!peaks.every((peak, index) => validatePeakParams(peakModels[index], peak, domain))) return 1e18;
       let sse = 0;
       for (let i = 0; i < xs.length; i++) {
-        const pred = peaks.reduce((sum, peak) => sum + modelY(model, xs[i], peak), 0);
+        const pred = peaks.reduce((sum, peak, index) => sum + modelY(peakModels[index], xs[i], peak), 0);
         const err = ys[i] - pred;
         sse += err * err;
       }
       return sse / xs.length;
     };
     const result = x0.length ? nelderMead(objective, x0, steps, maxIter, 1e-10) : { x: [], f: objective([]), iterations: 0, converged: true };
-    const peaks = optimizationVectorToPeaks(model, normalizedPeaks, result.x, constraintMapping, peakCount).sort((a, b) => a.center - b.center);
-    if (!validatePeaks(model, peaks, domain)) throw new Error('フィッティングが収束しませんでした。初期値や範囲を見直してください。');
-    const componentY = peaks.map((peak) => xs.map((x) => modelY(model, x, peak)));
+    const unsortedPeaks = optimizationVectorToPeaks(model, normalizedPeaks, result.x, constraintMapping, peakCount, peakModels);
+    const peakBundles = unsortedPeaks.map((peak, index) => ({ peak, peakModel: peakModels[index] })).sort((a, b) => a.peak.center - b.peak.center);
+    const peaks = peakBundles.map(({ peak }) => peak);
+    const sortedPeakModels = peakBundles.map(({ peakModel }) => peakModel);
+    if (!peaks.every((peak, index) => validatePeakParams(sortedPeakModels[index], peak, domain))) throw new Error('フィッティングが収束しませんでした。初期値や範囲を見直してください。');
+    const componentY = peaks.map((peak, index) => xs.map((x) => modelY(sortedPeakModels[index], x, peak)));
     const fitYSub = xs.map((_, i) => componentY.reduce((sum, ysPeak) => sum + ysPeak[i], 0));
     const fitYAbs = fitYSub.map((v, i) => v + background.bgY[i]);
     const residuals = ys.map((v, i) => v - fitYSub[i]);
@@ -500,7 +511,8 @@
     const ssTot = ys.reduce((acc, v) => acc + (v - yMean) ** 2, 0);
     const ssRes = residuals.reduce((acc, v) => acc + v * v, 0);
     const r2 = ssTot > 0 ? 1 - ssRes / ssTot : NaN;
-    const peakMetrics = peaks.map((peak) => derivePeakMetrics(model, peak, xs));
+    const peakMetrics = peaks.map((peak, index) => derivePeakMetrics(sortedPeakModels[index], peak, xs));
+    const resolvedModel = sortedPeakModels.every((peakModel) => peakModel === sortedPeakModels[0]) ? sortedPeakModels[0] : 'mixed';
     const metrics = {
       rmse, r2, objective: result.f, iterations: result.iterations, converged: result.converged,
       peakCount,
@@ -508,8 +520,9 @@
       area: peakMetrics.reduce((sum, item) => sum + (item.area || 0), 0),
     };
     return {
-      model,
+      model: resolvedModel,
       peakCount,
+      peakModels: sortedPeakModels,
       peaks,
       peakMetrics,
       params: peaks[0],
@@ -644,7 +657,7 @@
     const header = ['file', 'model', 'peak_count', 'x_min', 'x_max'];
     for (let i = 0; i < maxPeaks; i++) {
       header.push(
-        `peak${i + 1}_amplitude`, `peak${i + 1}_center`, `peak${i + 1}_sigma`, `peak${i + 1}_gamma`, `peak${i + 1}_q`,
+        `peak${i + 1}_model`, `peak${i + 1}_amplitude`, `peak${i + 1}_center`, `peak${i + 1}_sigma`, `peak${i + 1}_gamma`, `peak${i + 1}_q`,
         `peak${i + 1}_amplitude_constraint`, `peak${i + 1}_center_constraint`, `peak${i + 1}_sigma_constraint`, `peak${i + 1}_gamma_constraint`, `peak${i + 1}_q_constraint`,
         `peak${i + 1}_fwhm`, `peak${i + 1}_area`
       );
@@ -658,7 +671,7 @@
         const metric = row.peakMetrics?.[i] || {};
         const constraints = row.parameterConstraints?.perPeak?.[i] || {};
         values.push(
-          peak.amplitude ?? '', peak.center ?? '', peak.sigma ?? '', peak.gamma ?? '', peak.q ?? '',
+          row.peakModels?.[i] || row.model || '', peak.amplitude ?? '', peak.center ?? '', peak.sigma ?? '', peak.gamma ?? '', peak.q ?? '',
           serializeConstraint(constraints.amplitude), serializeConstraint(constraints.center), serializeConstraint(constraints.sigma), serializeConstraint(constraints.gamma), serializeConstraint(constraints.q),
           metric.fwhm ?? '', metric.area ?? ''
         );
@@ -696,5 +709,6 @@
     modelY,
     normalizePeakCount,
     normalizeParameterConstraints,
+    normalizePeakModels,
   };
 });

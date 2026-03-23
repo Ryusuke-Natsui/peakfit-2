@@ -14,6 +14,7 @@ window.addEventListener('DOMContentLoaded', () => {
   bindEvents();
   registerServiceWorker();
   renderPeakInputs();
+  syncBackgroundDelimiterAvailability();
   resizeCanvas();
   draw();
 });
@@ -27,6 +28,7 @@ function bindElements() {
   els.bgEdgeFraction = document.getElementById('bgEdgeFraction');
   els.bgZipExtension = document.getElementById('bgZipExtension');
   els.bgZipColumns = document.getElementById('bgZipColumns');
+  els.bgZipDelimiter = document.getElementById('bgZipDelimiter');
   els.peakInputs = document.getElementById('peakInputs');
   els.autoInitBtn = document.getElementById('autoInitBtn');
   els.fitCurrentBtn = document.getElementById('fitCurrentBtn');
@@ -63,6 +65,7 @@ function bindEvents() {
     syncInitialInputsFromSelectionEstimate();
     draw();
   });
+  els.bgZipExtension.addEventListener('change', syncBackgroundDelimiterAvailability);
   els.autoInitBtn.addEventListener('click', () => syncInitialInputsFromSelectionEstimate(true));
   els.fitCurrentBtn.addEventListener('click', () => runCurrentFit());
   els.fitAllBtn.addEventListener('click', () => runBatchFit());
@@ -281,6 +284,7 @@ async function exportBackgroundSubtractedZip() {
     const edgeFraction = Number(els.bgEdgeFraction.value);
     const outputExtension = normalizeBackgroundZipExtension(els.bgZipExtension.value);
     const columnMode = normalizeBackgroundZipColumnMode(els.bgZipColumns.value);
+    const delimiterMode = normalizeBackgroundZipDelimiter(els.bgZipDelimiter.value, outputExtension);
     const files = state.datasets.map((ds) => ({
       name: buildBackgroundOutputName(ds.name, outputExtension),
       content: PeakFitCore.backgroundSubtractedToCSV(ds.data, {
@@ -288,6 +292,7 @@ async function exportBackgroundSubtractedZip() {
         xMax: state.selection.xMax,
         edgeFraction,
         columnMode,
+        delimiterMode,
       }),
     }));
     const readme = [
@@ -297,6 +302,7 @@ async function exportBackgroundSubtractedZip() {
       `edge_fraction,${edgeFraction}`,
       `file_extension,${outputExtension}`,
       `column_mode,${columnMode}`,
+      `delimiter_mode,${delimiterMode}`,
       `generated_at,${new Date().toISOString()}`,
     ].join('\n');
     files.unshift({ name: 'README.txt', content: readme });
@@ -604,9 +610,21 @@ function normalizeBackgroundZipColumnMode(value) {
   return value === 'x_y_corrected' ? 'x_y_corrected' : 'full';
 }
 
+function normalizeBackgroundZipDelimiter(value, extension = 'csv') {
+  if (normalizeBackgroundZipExtension(extension) === 'csv') return 'comma';
+  return ['comma', 'tab', 'space'].includes(value) ? value : 'comma';
+}
+
 function buildBackgroundOutputName(fileName, extension = 'csv') {
   const normalizedExtension = normalizeBackgroundZipExtension(extension);
   const dot = fileName.lastIndexOf('.');
   if (dot <= 0) return `${fileName}_bgsub.${normalizedExtension}`;
   return `${fileName.slice(0, dot)}_bgsub.${normalizedExtension}`;
+}
+
+function syncBackgroundDelimiterAvailability() {
+  if (!els.bgZipDelimiter || !els.bgZipExtension) return;
+  const isCsv = normalizeBackgroundZipExtension(els.bgZipExtension.value) === 'csv';
+  els.bgZipDelimiter.disabled = isCsv;
+  if (isCsv) els.bgZipDelimiter.value = 'comma';
 }

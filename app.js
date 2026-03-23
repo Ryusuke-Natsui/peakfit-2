@@ -81,6 +81,7 @@ function renderPeakInputs() {
   const model = els.model?.value || 'gaussian';
   const keys = PeakFitCore.modelKeys(model);
   const existing = collectInitialPeaksSafe();
+  const gammaLabel = model === 'bwf' ? 'w' : 'γ';
   els.peakInputs.innerHTML = '';
   for (let i = 0; i < peakCount; i++) {
     const peak = existing[i] || {};
@@ -92,8 +93,8 @@ function renderPeakInputs() {
         ${buildPeakInput('amplitude', 'Amplitude', i, peak.amplitude ?? '')}
         ${buildPeakInput('center', 'Center', i, peak.center ?? '')}
         ${keys.includes('sigma') ? buildPeakInput('sigma', 'σ', i, peak.sigma ?? '') : ''}
-        ${keys.includes('gamma') ? buildPeakInput('gamma', 'γ', i, peak.gamma ?? '') : ''}
-        ${keys.includes('q') ? buildPeakInput('q', 'q', i, peak.q ?? -5) : ''}
+        ${keys.includes('gamma') ? buildPeakInput('gamma', gammaLabel, i, peak.gamma ?? '') : ''}
+        ${keys.includes('q') ? buildPeakInput('q', 'q', i, peak.q ?? -2) : ''}
       </div>
     `;
     els.peakInputs.appendChild(card);
@@ -370,7 +371,7 @@ function renderFitInfo(result) {
         <div>中心: ${formatNumber(peak.center)}</div>
         <div>振幅: ${formatNumber(peak.amplitude)}</div>
         ${peak.sigma != null ? `<div>σ: ${formatNumber(peak.sigma)}</div>` : ''}
-        ${peak.gamma != null ? `<div>γ: ${formatNumber(peak.gamma)}</div>` : ''}
+        ${peak.gamma != null ? `<div>${result.model === 'bwf' ? 'w' : 'γ'}: ${formatNumber(peak.gamma)}</div>` : ''}
         ${peak.q != null ? `<div>q: ${formatNumber(peak.q)}</div>` : ''}
         <div>FWHM: ${formatNumber(metrics.fwhm)}</div>
         <div>面積: ${formatNumber(metrics.area)}</div>

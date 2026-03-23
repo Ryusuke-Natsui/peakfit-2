@@ -32,6 +32,7 @@ function bindElements() {
   els.peakInputs = document.getElementById('peakInputs');
   els.autoInitBtn = document.getElementById('autoInitBtn');
   els.fitCurrentBtn = document.getElementById('fitCurrentBtn');
+  els.sequentialFit = document.getElementById('sequentialFit');
   els.fitAllBtn = document.getElementById('fitAllBtn');
   els.subtractAllBtn = document.getElementById('subtractAllBtn');
   els.exportCsvBtn = document.getElementById('exportCsvBtn');
@@ -50,22 +51,23 @@ function bindEvents() {
     state.activeIndex = Number(els.datasetSelect.value) || 0;
     state.currentFit = null;
     if (!state.selection && currentDataset()) state.selection = PeakFitCore.defaultSelection(currentDataset().data);
-    syncInitialInputsFromSelectionEstimate();
+    syncInitialInputsForActiveDataset();
     renderResultsTable();
     draw();
   });
   els.model.addEventListener('change', () => {
     renderPeakInputs();
-    syncInitialInputsFromSelectionEstimate();
+    syncInitialInputsForActiveDataset();
     draw();
   });
   els.peakCount.addEventListener('change', () => {
     els.peakCount.value = String(PeakFitCore.normalizePeakCount(els.peakCount.value));
     renderPeakInputs();
-    syncInitialInputsFromSelectionEstimate();
+    syncInitialInputsForActiveDataset();
     draw();
   });
   els.bgZipExtension.addEventListener('change', syncBackgroundDelimiterAvailability);
+  els.sequentialFit?.addEventListener('change', () => syncInitialInputsForActiveDataset());
   els.autoInitBtn.addEventListener('click', () => syncInitialInputsFromSelectionEstimate(true));
   els.fitCurrentBtn.addEventListener('click', () => runCurrentFit());
   els.fitAllBtn.addEventListener('click', () => runBatchFit());
@@ -160,7 +162,7 @@ async function onFilesSelected(event) {
   state.currentFit = null;
   state.batchResults = [];
   refreshDatasetSelect();
-  syncInitialInputsFromSelectionEstimate();
+  syncInitialInputsForActiveDataset();
   renderFitInfo(null);
   renderResultsTable();
   draw();
@@ -217,6 +219,36 @@ function collectInitialPeaks() {
   return peaks;
 }
 
+function getSequentialSeedPeaksForDataset(datasetIndex) {
+  if (!els.sequentialFit?.checked || datasetIndex <= 0) return null;
+  const previousName = state.datasets[datasetIndex - 1]?.name;
+  if (!previousName) return null;
+  const previousResult = state.batchResults.find((result) => result.fileName === previousName);
+  if (!previousResult || previousResult.model !== els.model.value) return null;
+  const peakCount = PeakFitCore.normalizePeakCount(els.peakCount.value);
+  if (!Array.isArray(previousResult.peaks) || previousResult.peaks.length !== peakCount) return null;
+  return previousResult.peaks.map((peak) => ({ ...peak }));
+}
+
+function applyPeaksToInputs(peaks) {
+  peaks.forEach((peak, i) => {
+    Object.entries(peak).forEach(([key, value]) => {
+      const input = els.peakInputs.querySelector(`[data-peak-index="${i}"][data-param-key="${key}"]`);
+      if (input) input.value = formatNumber(value);
+    });
+  });
+}
+
+function syncInitialInputsForActiveDataset(forceToast = false) {
+  const seedPeaks = getSequentialSeedPeaksForDataset(state.activeIndex);
+  if (seedPeaks) {
+    applyPeaksToInputs(seedPeaks);
+    if (forceToast) toast('直前ファイルのフィット結果を初期値として引き継ぎました。');
+    return;
+  }
+  syncInitialInputsFromSelectionEstimate(forceToast);
+}
+
 function syncInitialInputsFromSelectionEstimate(forceToast = false) {
   const ds = currentDataset();
   if (!ds || !state.selection) return;
@@ -229,12 +261,7 @@ function syncInitialInputsFromSelectionEstimate(forceToast = false) {
       subtractBackground: els.subtractBg.checked,
       edgeFraction: Number(els.bgEdgeFraction.value),
     });
-    estimated.forEach((peak, i) => {
-      Object.entries(peak).forEach(([key, value]) => {
-        const input = els.peakInputs.querySelector(`[data-peak-index="${i}"][data-param-key="${key}"]`);
-        if (input) input.value = formatNumber(value);
-      });
-    });
+    applyPeaksToInputs(estimated);
     if (forceToast) toast('選択範囲から初期値を再推定しました。');
   } catch (err) {
     if (forceToast) toast(err.message || '初期値推定に失敗しました。', true);
@@ -247,6 +274,7 @@ function runCurrentFit() {
     ensureReady(ds);
     const result = PeakFitCore.fitMultiPeak(ds.data, buildFitOptions());
     state.currentFit = { ...result, fileName: ds.name };
+    applyPeaksToInputs(state.currentFit.peaks);
     upsertBatchResult(state.currentFit);
     renderFitInfo(state.currentFit);
     renderResultsTable();
@@ -262,10 +290,15 @@ async function runBatchFit() {
     if (!state.datasets.length) throw new Error('先にファイルを読み込んでください。');
     if (!state.selection) throw new Error('先にグラフ上でフィット範囲を選択してください。');
     const baseOptions = buildFitOptions();
+    const sequentialFit = Boolean(els.sequentialFit?.checked);
     const results = [];
+    let nextInitialPeaks = baseOptions.initialPeaks.map((peak) => ({ ...peak }));
     for (const ds of state.datasets) {
-      const result = PeakFitCore.fitMultiPeak(ds.data, baseOptions);
-      results.push({ ...result, fileName: ds.name });
+      const fitOptions = { ...baseOptions, initialPeaks: nextInitialPeaks.map((peak) => ({ ...peak })) };
+      const result = PeakFitCore.fitMultiPeak(ds.data, fitOptions);
+      const fullResult = { ...result, fileName: ds.name };
+      results.push(fullResult);
+      if (sequentialFit) nextInitialPeaks = fullResult.peaks.map((peak) => ({ ...peak }));
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
     state.batchResults = results;
@@ -273,7 +306,10 @@ async function runBatchFit() {
     renderFitInfo(state.currentFit);
     renderResultsTable();
     draw();
-    toast(`${results.length}件のファイルを同一初期条件で一括フィットしました。`);
+    if (state.currentFit?.peaks?.length) applyPeaksToInputs(state.currentFit.peaks);
+    toast(sequentialFit
+      ? `${results.length}件のファイルを順次、直前のフィット結果を引き継いで一括フィットしました。`
+      : `${results.length}件のファイルを同一初期条件で一括フィットしました。`);
   } catch (err) {
     toast(err.message || '一括フィットに失敗しました。', true);
   }

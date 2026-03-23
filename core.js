@@ -430,13 +430,18 @@
 
 
   function backgroundSubtractedToCSV(data, options) {
-    const { xMin, xMax, edgeFraction = 0.15 } = options;
+    const { xMin, xMax, edgeFraction = 0.15, columnMode = 'full' } = options;
     const points = selectRange(data, xMin, xMax);
     if (points.length < 4) throw new Error('背景差し引き範囲の点数が少なすぎます。');
     const background = estimateLinearBackground(points, edgeFraction);
-    const lines = ['x,y_raw,y_background,y_corrected'];
+    const normalizedColumnMode = columnMode === 'x_y_corrected' ? 'x_y_corrected' : 'full';
+    const lines = [normalizedColumnMode === 'x_y_corrected' ? 'x,y_corrected' : 'x,y_raw,y_background,y_corrected'];
     points.forEach((point, index) => {
-      lines.push([point.x, point.y, background.bgY[index], background.correctedY[index]].join(','));
+      lines.push(
+        normalizedColumnMode === 'x_y_corrected'
+          ? [point.x, background.correctedY[index]].join(',')
+          : [point.x, point.y, background.bgY[index], background.correctedY[index]].join(',')
+      );
     });
     return lines.join('\n');
   }

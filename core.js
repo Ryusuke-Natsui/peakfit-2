@@ -118,9 +118,51 @@
 
   function bwf(x, p) {
     const { amplitude, center, gamma, q } = p;
+    const width = Math.max(Math.abs(gamma), 1e-9);
     const qq = Math.abs(q) < 1e-6 ? (q < 0 ? -1e-6 : 1e-6) : q;
-    const eps = (x - center) / gamma;
+    const eps = (x - center) / width;
     return amplitude * ((1 + eps / qq) ** 2) / (1 + eps * eps);
+  }
+
+  function interpolateY(xs, ys, x) {
+    if (!xs.length) return NaN;
+    if (x <= xs[0]) return ys[0];
+    if (x >= xs[xs.length - 1]) return ys[ys.length - 1];
+    for (let i = 1; i < xs.length; i++) {
+      if (x <= xs[i]) {
+        const dx = xs[i] - xs[i - 1];
+        if (Math.abs(dx) < 1e-12) return ys[i];
+        const t = (x - xs[i - 1]) / dx;
+        return ys[i - 1] + t * (ys[i] - ys[i - 1]);
+      }
+    }
+    return ys[ys.length - 1];
+  }
+
+  function estimateBwfQ(xs, ys, center, width, baseline) {
+    const safeWidth = Math.max(Math.abs(width), 1e-9);
+    const xlr = [center - safeWidth, center + safeWidth];
+    const ylr = xlr.map((x) => interpolateY(xs, ys, x));
+    const xlrh = [center - safeWidth / 2, center + safeWidth / 2];
+    const ylrh = xlrh.map((x) => interpolateY(xs, ys, x));
+    const denom = ylr[0] - baseline;
+    let k = Math.abs(denom) < 1e-12 ? NaN : (ylr[1] - baseline) / denom;
+    if (!Number.isFinite(k) || Math.abs(k - 1) < 1e-12) k = 10;
+    const sqrtK = Math.sqrt(Math.max(k, 0));
+    let q0 = (sqrtK + 1) / (sqrtK - 1);
+    if (!Number.isFinite(q0) || Math.abs(q0) < 1e-6) q0 = -2;
+    let q1 = 1 / q0;
+    if (!Number.isFinite(q1) || Math.abs(q1) < 1e-6) q1 = -2;
+    const k2Denom = ylrh[0] - baseline;
+    const k2 = Math.abs(k2Denom) < 1e-12 ? NaN : (ylrh[1] - baseline) / k2Denom;
+    const score = (candidate) => {
+      if (!Number.isFinite(candidate) || Math.abs(candidate) < 1e-6) return Number.POSITIVE_INFINITY;
+      const term = 1 / (2 * candidate);
+      const expected = ((1 + term) / (1 - term)) ** 2;
+      return Math.abs(k2 - expected);
+    };
+    const q = score(q0) <= score(q1) ? q0 : q1;
+    return Number.isFinite(q) && Math.abs(q) >= 1e-6 ? q : -2;
   }
 
   function modelY(model, x, params) {
@@ -224,12 +266,13 @@
       const amplitude = Math.max(ys[peakIdx], 1e-3);
       const center = xs[peakIdx];
       const fwhm = halfMaxWidth(xs, ys, peakIdx, amplitude / 2);
+      const gamma = Math.max((fwhm / 2) * 0.85, 1e-4);
       return {
         amplitude,
         center,
         sigma: Math.max(fwhm / GAUSS_FWHM, 1e-4),
-        gamma: Math.max(fwhm / 2, 1e-4),
-        q: -5,
+        gamma,
+        q: estimateBwfQ(xs, ys, center, gamma, 0),
       };
     });
     return peaks.map((peak) => {

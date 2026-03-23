@@ -74,6 +74,7 @@
           <div class="button-row">
             <button id="fitCurrentBtn" type="button">現在のファイルをフィット</button>
             <button id="fitAllBtn" type="button">全ファイルを一括フィット</button>
+            <button id="subtractAllBtn" type="button">背景差し引きのみ（ZIP）</button>
             <button id="exportCsvBtn" type="button">CSVを書き出し</button>
             <button id="clearBtn" type="button" class="secondary">クリア</button>
           </div>
@@ -84,7 +85,7 @@
         <div class="plot-header">
           <div>
             <h2>グラフ</h2>
-            <p>青: 生データ / 灰: 線形背景 / 細線: 各ピーク / 赤: 合成フィット</p>
+            <p>青: 生データ / 灰: 線形背景 / 緑: 背景差し引きデータ / 細線: 各ピーク / 赤: 合成フィット</p>
           </div>
         </div>
         <canvas id="plotCanvas"></canvas>

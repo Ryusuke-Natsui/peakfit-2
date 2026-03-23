@@ -29,6 +29,7 @@ function bindElements() {
   els.autoInitBtn = document.getElementById('autoInitBtn');
   els.fitCurrentBtn = document.getElementById('fitCurrentBtn');
   els.fitAllBtn = document.getElementById('fitAllBtn');
+  els.subtractAllBtn = document.getElementById('subtractAllBtn');
   els.exportCsvBtn = document.getElementById('exportCsvBtn');
   els.clearBtn = document.getElementById('clearBtn');
   els.selectionText = document.getElementById('selectionText');
@@ -63,6 +64,7 @@ function bindEvents() {
   els.autoInitBtn.addEventListener('click', () => syncInitialInputsFromSelectionEstimate(true));
   els.fitCurrentBtn.addEventListener('click', () => runCurrentFit());
   els.fitAllBtn.addEventListener('click', () => runBatchFit());
+  els.subtractAllBtn.addEventListener('click', () => exportBackgroundSubtractedZip());
   els.exportCsvBtn.addEventListener('click', exportCsv);
   els.clearBtn.addEventListener('click', clearAll);
   window.addEventListener('resize', () => { resizeCanvas(); draw(); });
@@ -269,6 +271,49 @@ async function runBatchFit() {
   }
 }
 
+
+async function exportBackgroundSubtractedZip() {
+  try {
+    if (!state.datasets.length) throw new Error('先にファイルを読み込んでください。');
+    if (!state.selection) throw new Error('先にグラフ上で処理範囲を選択してください。');
+    const edgeFraction = Number(els.bgEdgeFraction.value);
+    const files = state.datasets.map((ds) => ({
+      name: buildBackgroundOutputName(ds.name),
+      content: PeakFitCore.backgroundSubtractedToCSV(ds.data, {
+        xMin: state.selection.xMin,
+        xMax: state.selection.xMax,
+        edgeFraction,
+      }),
+    }));
+    const readme = [
+      'Peak Fitting PWA background subtraction export',
+      `selection_x_min,${state.selection.xMin}`,
+      `selection_x_max,${state.selection.xMax}`,
+      `edge_fraction,${edgeFraction}`,
+      `generated_at,${new Date().toISOString()}`,
+    ].join('\n');
+    files.unshift({ name: 'README.txt', content: readme });
+    const zipBlob = PeakFitCore.createZipFromTextFiles(files);
+    downloadBlob(zipBlob, 'background_subtracted.zip', 'application/zip');
+    const previewPoints = PeakFitCore.selectRange(currentDataset().data, state.selection.xMin, state.selection.xMax);
+    const preview = PeakFitCore.estimateLinearBackground(previewPoints, edgeFraction);
+    state.currentFit = {
+      ...(state.currentFit && state.currentFit.fileName === currentDataset().name ? state.currentFit : {}),
+      fileName: currentDataset().name,
+      background: { slope: preview.slope, intercept: preview.intercept },
+      x: previewPoints.map((p) => p.x),
+      yRaw: previewPoints.map((p) => p.y),
+      yBackground: preview.bgY,
+      yCorrected: preview.correctedY,
+    };
+    renderFitInfo(state.currentFit);
+    draw();
+    toast(`${state.datasets.length}件の背景差し引き結果をZIPで出力しました。`);
+  } catch (err) {
+    toast(err.message || '背景差し引きZIPの作成に失敗しました。', true);
+  }
+}
+
 function exportCsv() {
   if (!state.batchResults.length) return toast('先にフィット結果を作成してください。', true);
   const csv = PeakFitCore.resultsToCSV(state.batchResults);
@@ -293,7 +338,17 @@ function renderFitInfo(result) {
     els.fitInfo.innerHTML = '<div class="muted">まだフィットしていません。</div>';
     return;
   }
-  const bg = result.background;
+  const bg = result.background || { slope: NaN, intercept: NaN };
+  if (!Array.isArray(result.peaks) || !Array.isArray(result.peakMetrics)) {
+    els.fitInfo.innerHTML = `
+      <div><strong>${escapeHtml(result.fileName)}</strong></div>
+      <div>モード: 背景差し引きのみ</div>
+      <div>点数: ${result.x?.length ?? 0}</div>
+      <div>背景傾き: ${formatNumber(bg.slope)}</div>
+      <div>背景切片: ${formatNumber(bg.intercept)}</div>
+    `;
+    return;
+  }
   const peaksHtml = result.peaks.map((peak, index) => {
     const metrics = result.peakMetrics[index];
     return `
@@ -398,10 +453,11 @@ function draw() {
     ctx.fillRect(x1, plot.top, x2 - x1, plot.bottom - plot.top);
   }
   if (state.currentFit && state.currentFit.fileName === ds.name) {
-    drawSeries(ctx, plot, bounds, state.currentFit.x, state.currentFit.yBackground, '#94a3b8', 1);
+    if (state.currentFit.yBackground?.length) drawSeries(ctx, plot, bounds, state.currentFit.x, state.currentFit.yBackground, '#94a3b8', 1);
+    if (state.currentFit.yCorrected?.length) drawSeries(ctx, plot, bounds, state.currentFit.x, state.currentFit.yCorrected, '#34d399', 1.4);
     const componentColors = ['#fb7185', '#f59e0b', '#34d399', '#a78bfa', '#f472b6', '#22d3ee'];
-    state.currentFit.yComponentsAbs.forEach((series, index) => drawSeries(ctx, plot, bounds, state.currentFit.x, series, componentColors[index % componentColors.length], 1.2));
-    drawSeries(ctx, plot, bounds, state.currentFit.x, state.currentFit.yFitAbs, '#f43f5e', 2.4);
+    (state.currentFit.yComponentsAbs || []).forEach((series, index) => drawSeries(ctx, plot, bounds, state.currentFit.x, series, componentColors[index % componentColors.length], 1.2));
+    if (state.currentFit.yFitAbs?.length) drawSeries(ctx, plot, bounds, state.currentFit.x, state.currentFit.yFitAbs, '#f43f5e', 2.4);
   }
   ctx.restore();
 }
@@ -468,8 +524,16 @@ function dataBounds(data, fit = null) {
   let yMin = Math.min(...ys);
   let yMax = Math.max(...ys);
   if (fit) {
-    yMin = Math.min(yMin, ...fit.yFitAbs, ...fit.yBackground, ...fit.yComponentsAbs.flat());
-    yMax = Math.max(yMax, ...fit.yFitAbs, ...fit.yBackground, ...fit.yComponentsAbs.flat());
+    const extra = [
+      ...(fit.yFitAbs || []),
+      ...(fit.yBackground || []),
+      ...(fit.yCorrected || []),
+      ...((fit.yComponentsAbs || []).flat()),
+    ];
+    if (extra.length) {
+      yMin = Math.min(yMin, ...extra);
+      yMax = Math.max(yMax, ...extra);
+    }
   }
   const pad = Math.max((yMax - yMin) * 0.08, 1);
   return { xMin: Math.min(...xs), xMax: Math.max(...xs), yMin: yMin - pad, yMax: yMax + pad };
@@ -501,8 +565,8 @@ function escapeHtml(str) {
   return String(str).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 }
 function clamp(v, min, max) { return Math.min(max, Math.max(min, v)); }
-function downloadBlob(text, filename, type) {
-  const blob = new Blob([text], { type });
+function downloadBlob(content, filename, type) {
+  const blob = content instanceof Blob ? content : new Blob([content], { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -521,4 +585,11 @@ function toast(message, isError = false) {
 }
 function registerServiceWorker() {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+}
+
+
+function buildBackgroundOutputName(fileName) {
+  const dot = fileName.lastIndexOf('.');
+  if (dot <= 0) return `${fileName}_bgsub.csv`;
+  return `${fileName.slice(0, dot)}_bgsub.csv`;
 }

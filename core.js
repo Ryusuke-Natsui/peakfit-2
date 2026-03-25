@@ -108,13 +108,31 @@
     return (sum * h) / 3;
   }
 
+  function integratePiecewiseSimpson(fn, segments) {
+    return segments.reduce((total, segment) => {
+      const { min, max, steps } = segment;
+      if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return total;
+      return total + integrateSimpson(fn, min, max, steps);
+    }, 0);
+  }
+
   function voigt(x, p) {
     const { amplitude, center, sigma, gamma } = p;
-    const wG = Math.max(sigma, 1e-9);
-    const wL = Math.max(gamma, 1e-9);
+    const wG = Math.max(Math.abs(sigma), 1e-9);
+    const wL = Math.max(Math.abs(gamma), 1e-9);
     const a = SQRT_LN2 * wL / wG;
     const b = SQRT_4LN2 * (x - center) / wG;
-    const integral = integrateSimpson((t) => Math.exp(-(t * t)) / (a * a + (b - t) * (b - t)), -8, 8);
+    const range = Math.max(12, Math.abs(b) + 8);
+    const focusHalfWidth = Math.max(0.25, 6 * a);
+    const nearMin = Math.max(-range, b - focusHalfWidth);
+    const nearMax = Math.min(range, b + focusHalfWidth);
+    const integralFn = (t) => Math.exp(-(t * t)) / (a * a + (b - t) * (b - t));
+    const segments = [
+      { min: -range, max: nearMin, steps: 160 },
+      { min: nearMin, max: nearMax, steps: 720 },
+      { min: nearMax, max: range, steps: 160 },
+    ];
+    const integral = integratePiecewiseSimpson(integralFn, segments);
     return (amplitude * 2 * LN2 * wL * integral) / (Math.PI * SQRT_PI * wG * wG);
   }
 

@@ -44,7 +44,7 @@ npx serve .
 
 ## 実装メモ
 
-- Voigt は Gaussian FWHM (wG) と Lorentzian FWHM (wL) の厳密畳み込みとして実装しています。
+- Voigt は Gaussian FWHM (wG) と Lorentzian FWHM (wL) の畳み込みを、ピーク近傍を細かく分割した区分 Simpson 積分で安定に評価しています。
 - Voigt のパラメータは `A`（面積）, `xc`（中心）, `wG`, `wL` です。
 - フィットは同一モデルの 1〜6 ピーク和を想定しています。
 - 最適化はブラウザ内の Nelder–Mead 法で行っています。
